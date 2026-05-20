@@ -41,6 +41,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var activationMethod: ActivationMethod = .middleClick  // Default activation method
     var leftClickDoesNotInterrupt = false  // Allow left-click without exiting auto-scroll
     var settingsWindow: NSWindow?
+    var hudWindow: NSWindow?
 
     enum ActivationMethod: String, CaseIterable {
         case middleClick = "Middle Click"
@@ -309,6 +310,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         isAutoScrolling = true
         NSCursor.hide()
         scrollCursor?.set()
+        showScrollHUD()
 
         scrollTimer = Timer.scheduledTimer(withTimeInterval: 0.01, repeats: true) { [weak self] _ in
             self?.performScroll()
@@ -392,8 +394,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         RunLoop.current.add(scrollTimer!, forMode: .common)
         
+        showScrollHUD()
         // Show feedback to user
         showTrackpadModeNotification()
+    }
+
+    func showScrollHUD() {
+        // Dismiss any existing HUD
+        hudWindow?.close()
+        hudWindow = nil
+
+        let hud = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 200, height: 50),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        hud.isOpaque = false
+        hud.backgroundColor = NSColor.black.withAlphaComponent(0.75)
+        hud.level = .floating
+        hud.ignoresMouseEvents = true
+        hud.hasShadow = true
+        hud.center()
+
+        let textField = NSTextField(labelWithString: "Auto-Scroll Active")
+        textField.font = NSFont.boldSystemFont(ofSize: 18)
+        textField.textColor = .white
+        textField.alignment = .center
+        textField.frame = hud.contentView!.bounds.insetBy(dx: 10, dy: 10)
+        textField.autoresizingMask = [.width, .height]
+        hud.contentView?.addSubview(textField)
+
+        hud.makeKeyAndOrderFront(nil)
+        hudWindow = hud
+
+        // Fade out and close after 1.5 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.hudWindow?.close()
+            self?.hudWindow = nil
+        }
     }
 
     func showTrackpadModeNotification() {
