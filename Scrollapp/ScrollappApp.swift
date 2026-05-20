@@ -86,6 +86,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Safety: always unhide cursor on launch in case of unclean exit
+        NSCursor.unhide()
+
         // Load user preferences
         isDirectionInverted = UserDefaults.standard.bool(forKey: "invertScrollDirection")
         launchAtLogin = UserDefaults.standard.bool(forKey: "launchAtLogin")
