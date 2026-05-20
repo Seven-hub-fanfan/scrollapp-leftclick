@@ -514,6 +514,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             window.delegate = self
             settingsWindow = window
         }
+        NSApp.setActivationPolicy(.regular)
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -753,6 +754,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 extension AppDelegate: NSWindowDelegate {
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         sender.orderOut(nil)
+        NSApp.setActivationPolicy(.accessory)
         return false // don't close, just hide
     }
 }
