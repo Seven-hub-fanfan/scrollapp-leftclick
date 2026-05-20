@@ -1,91 +1,103 @@
-//
-//  ContentView.swift
-//  Scrollapp
-//
-
 import SwiftUI
 
 struct ContentView: View {
-    @State private var isAutoScrollActive = false
-    @Environment(\.openURL) private var openURL
-    
+    @AppStorage("scrollSensitivity") private var sensitivity: Double = 1.0
+    @AppStorage("invertScrollDirection") private var invertScroll = false
+    @AppStorage("leftClickDoesNotInterrupt") private var leftClickNoInterrupt = false
+    @AppStorage("launchAtLogin") private var launchAtLogin = false
+    @AppStorage("activationMethod") private var activationMethod = "Middle Click"
+
+    private let activationMethods = [
+        "Middle Click",
+        "Shift + Middle Click",
+        "Cmd + Middle Click",
+        "Option + Middle Click",
+        "Mouse Button 4",
+        "Mouse Button 5",
+        "Double Middle Click"
+    ]
+
     var body: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "arrow.up.and.down.circle.fill")
-                .resizable()
-                .frame(width: 60, height: 60)
-                .foregroundColor(.blue)
-                .padding(.top, 20)
-            
-            Text("Scrollapp")
-                .font(.largeTitle)
-                .fontWeight(.bold)
-                .padding(.bottom, 5)
-            
-            Text("Windows-style auto-scroll")
-                .font(.headline)
-                .foregroundColor(.secondary)
-            
+        VStack(spacing: 0) {
+            // Header
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.up.and.down.circle.fill")
+                    .font(.title2)
+                    .foregroundColor(.blue)
+                Text("Scrollapp")
+                    .font(.title3)
+                    .fontWeight(.bold)
+            }
+            .padding(.top, 16)
+            .padding(.bottom, 12)
+
             Divider()
-                .padding(.vertical, 10)
-            
-            VStack(alignment: .leading, spacing: 15) {
-                HowToUseRow(number: "1", text: "Middle-click anywhere")
-                HowToUseRow(number: "2", text: "Move mouse up/down to control speed")
-                HowToUseRow(number: "3", text: "Click again to stop scrolling")
+
+            // Scroll Speed
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Scroll Speed")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                HStack {
+                    Slider(value: $sensitivity, in: 0.2...3.0, step: 0.1)
+                    Text(String(format: "%.1fx", sensitivity))
+                        .monospacedDigit()
+                        .frame(width: 38)
+                        .font(.subheadline)
+                }
             }
             .padding(.horizontal)
-            
-            Spacer()
-            
+            .padding(.vertical, 10)
+
+            Divider().padding(.horizontal)
+
+            // Activation Method
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Activation Method")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                Picker("", selection: $activationMethod) {
+                    ForEach(activationMethods, id: \.self) { method in
+                        Text(method).tag(method)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 10)
+
+            Divider().padding(.horizontal)
+
+            // Toggles
+            VStack(spacing: 2) {
+                Toggle("Invert Scrolling Direction", isOn: $invertScroll)
+                Toggle("Left Click Does Not Interrupt Scrolling", isOn: $leftClickNoInterrupt)
+                Toggle("Launch at Login", isOn: $launchAtLogin)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            // Bottom buttons
             HStack {
+                Button("About") {
+                    let alert = NSAlert()
+                    alert.messageText = "About Scrollapp"
+                    alert.informativeText = "Windows-style auto-scrolling for macOS.\n\nActivate with your configured mouse button, then move the cursor to control scrolling speed and direction.\n\nRight-click or middle-click to exit."
+                    alert.alertStyle = .informational
+                    alert.addButton(withTitle: "OK")
+                    alert.runModal()
+                }
                 Spacer()
-                
                 Button("Quit") {
                     NSApplication.shared.terminate(nil)
                 }
-                .padding(.horizontal, 10)
-                
-                Button("About") {
-                    // Show about information - could open a URL or display a sheet
-                    let aboutURL = URL(string: "https://example.com/scrollapp")
-                    if let url = aboutURL {
-                        openURL(url)
-                    }
-                }
-                .padding(.horizontal, 10)
             }
-            .padding(.bottom, 10)
+            .padding(.horizontal)
+            .padding(.vertical, 12)
         }
-        .padding()
-        .frame(width: 320, height: 400)
+        .frame(width: 340, height: 440)
     }
-}
-
-struct HowToUseRow: View {
-    let number: String
-    let text: String
-    
-    var body: some View {
-        HStack(spacing: 15) {
-            ZStack {
-                Circle()
-                    .fill(Color.blue)
-                    .frame(width: 24, height: 24)
-                
-                Text(number)
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundColor(.white)
-            }
-            
-            Text(text)
-                .font(.system(size: 14))
-            
-            Spacer()
-        }
-    }
-}
-
-#Preview {
-    ContentView()
 }

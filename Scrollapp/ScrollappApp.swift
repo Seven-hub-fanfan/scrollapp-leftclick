@@ -40,7 +40,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var scrollSensitivity: Double = 1.0  // Default sensitivity multiplier
     var activationMethod: ActivationMethod = .middleClick  // Default activation method
     var leftClickDoesNotInterrupt = false  // Allow left-click without exiting auto-scroll
-    
+    var settingsWindow: NSWindow?
+
     enum ActivationMethod: String, CaseIterable {
         case middleClick = "Middle Click"
         case shiftMiddleClick = "Shift + Middle Click"
@@ -112,6 +113,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Request notification permission
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+
+        // Listen for changes from the settings window
+        NotificationCenter.default.addObserver(self, selector: #selector(defaultsDidChange), name: UserDefaults.didChangeNotification, object: nil)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -182,6 +186,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(leftClickItem)
 
         menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "Settings...", action: #selector(showSettingsWindow), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "About Scrollapp", action: #selector(showAbout), keyEquivalent: ""))
         
         let methodsMenu = NSMenu()
@@ -448,6 +453,92 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.runModal()
     }
 
+    @objc func showSettingsWindow() {
+        if settingsWindow == nil {
+            let contentView = ContentView()
+            let hostingController = NSHostingController(rootView: contentView)
+            let window = NSWindow(contentViewController: hostingController)
+            window.title = "Scrollapp"
+            window.styleMask = [.titled, .closable, .miniaturizable]
+            window.setContentSize(NSSize(width: 340, height: 440))
+            window.isReleasedWhenClosed = false
+            window.center()
+            window.delegate = self
+            settingsWindow = window
+        }
+        settingsWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showSettingsWindow()
+        return true
+    }
+
+    @objc func defaultsDidChange() {
+        let ud = UserDefaults.standard
+
+        let newSensitivity = ud.double(forKey: "scrollSensitivity")
+        let newSens = newSensitivity == 0 ? 1.0 : newSensitivity
+        if scrollSensitivity != newSens {
+            scrollSensitivity = newSens
+            updateMenuSensitivity()
+        }
+
+        let newInvert = ud.bool(forKey: "invertScrollDirection")
+        if isDirectionInverted != newInvert {
+            isDirectionInverted = newInvert
+            if let item = statusItem.menu?.items.first(where: { $0.action == #selector(toggleDirectionInversion) }) {
+                item.state = isDirectionInverted ? .on : .off
+            }
+        }
+
+        let newLeftClick = ud.bool(forKey: "leftClickDoesNotInterrupt")
+        if leftClickDoesNotInterrupt != newLeftClick {
+            leftClickDoesNotInterrupt = newLeftClick
+            if let item = statusItem.menu?.items.first(where: { $0.title == "Left Click Does Not Interrupt Scrolling" }) {
+                item.state = leftClickDoesNotInterrupt ? .on : .off
+            }
+        }
+
+        let newLaunch = ud.bool(forKey: "launchAtLogin")
+        if launchAtLogin != newLaunch {
+            launchAtLogin = newLaunch
+            updateLoginItemState()
+            if let item = statusItem.menu?.items.first(where: { $0.title == "Launch at Login" }) {
+                item.state = launchAtLogin ? .on : .off
+            }
+        }
+
+        if let methodRaw = ud.string(forKey: "activationMethod"),
+           let method = ActivationMethod(rawValue: methodRaw),
+           activationMethod != method {
+            activationMethod = method
+            setupMiddleClickListeners()
+            if let activationItem = statusItem.menu?.items.first(where: { $0.title == "Activation Method" }),
+               let submenu = activationItem.submenu {
+                for item in submenu.items {
+                    item.state = (item.representedObject as? ActivationMethod == method) ? .on : .off
+                }
+            }
+        }
+    }
+
+    func updateMenuSensitivity() {
+        guard let item = statusItem.menu?.items.first(where: { $0.title.starts(with: "Scroll Speed") }) else { return }
+        item.title = String(format: "Scroll Speed: %.1fx", scrollSensitivity)
+        if let view = item.view {
+            if let label = view.viewWithTag(100) as? NSTextField {
+                label.stringValue = String(format: "%.1fx", scrollSensitivity)
+            }
+            for sub in view.subviews {
+                if let slider = sub as? NSSlider {
+                    slider.doubleValue = scrollSensitivity
+                }
+            }
+        }
+    }
+
     @objc func quitApp() {
         NSApplication.shared.terminate(nil)
     }
@@ -601,5 +692,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                         }
                     }
         }
+    }
+}
+
+extension AppDelegate: NSWindowDelegate {
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)
+        return false // don't close, just hide
     }
 }
