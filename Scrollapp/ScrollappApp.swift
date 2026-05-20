@@ -411,6 +411,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             defer: false
         )
         hud.isOpaque = false
+        hud.isReleasedWhenClosed = false
         hud.backgroundColor = NSColor.black.withAlphaComponent(0.75)
         hud.level = .floating
         hud.ignoresMouseEvents = true
@@ -429,9 +430,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         hudWindow = hud
 
         // Fade out and close after 1.5 seconds
+        let thisHud = hud
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            self?.hudWindow?.close()
-            self?.hudWindow = nil
+            if self?.hudWindow === thisHud {
+                thisHud.close()
+                self?.hudWindow = nil
+            }
         }
     }
 
