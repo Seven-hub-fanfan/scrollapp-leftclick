@@ -39,6 +39,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var launchAtLogin = false        // Track launch at login state
     var scrollSensitivity: Double = 1.0  // Default sensitivity multiplier
     var activationMethod: ActivationMethod = .middleClick  // Default activation method
+    var leftClickDoesNotInterrupt = false  // Allow left-click without exiting auto-scroll
     
     enum ActivationMethod: String, CaseIterable {
         case middleClick = "Middle Click"
@@ -90,6 +91,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         scrollSensitivity = UserDefaults.standard.double(forKey: "scrollSensitivity")
         if scrollSensitivity == 0 { scrollSensitivity = 1.0 } // Default if not set
         
+        leftClickDoesNotInterrupt = UserDefaults.standard.bool(forKey: "leftClickDoesNotInterrupt")
+
         // Load activation method
         if let savedMethod = UserDefaults.standard.string(forKey: "activationMethod"),
            let method = ActivationMethod(rawValue: savedMethod) {
@@ -172,7 +175,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         launchItem.state = launchAtLogin ? .on : .off
         menu.addItem(launchItem)
-        
+
+        // Add left-click does not interrupt toggle
+        let leftClickItem = NSMenuItem(title: "Left Click Does Not Interrupt Scrolling", action: #selector(toggleLeftClickInterrupt), keyEquivalent: "")
+        leftClickItem.state = leftClickDoesNotInterrupt ? .on : .off
+        menu.addItem(leftClickItem)
+
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "About Scrollapp", action: #selector(showAbout), keyEquivalent: ""))
         
@@ -488,14 +496,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Monitor for clicks to exit auto-scroll mode
         clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
             guard let self = self, self.isAutoScrolling else { return }
-            
+
             // Don't stop auto-scroll for the configured activation button
             if event.type == .otherMouseDown,
                let activationButtonNumber = self.activationMethod.buttonNumber,
                event.buttonNumber == activationButtonNumber {
                 return // Skip - let the activation method handler deal with it
             }
-            
+
+            // If left-click interruption is disabled, allow left-click to pass through
+            if self.leftClickDoesNotInterrupt && event.type == .leftMouseDown {
+                return
+            }
+
             // For all other clicks, stop auto-scroll
             self.stopAutoScroll()
         }
@@ -521,10 +534,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         launchAtLogin = !launchAtLogin
         UserDefaults.standard.set(launchAtLogin, forKey: "launchAtLogin")
         updateLoginItemState()
-        
+
         // Update menu item state
         if let launchItem = statusItem.menu?.items.first(where: { $0.title == "Launch at Login" }) {
             launchItem.state = launchAtLogin ? .on : .off
+        }
+    }
+
+    @objc func toggleLeftClickInterrupt() {
+        leftClickDoesNotInterrupt = !leftClickDoesNotInterrupt
+        UserDefaults.standard.set(leftClickDoesNotInterrupt, forKey: "leftClickDoesNotInterrupt")
+
+        // Update menu item state
+        if let leftClickItem = statusItem.menu?.items.first(where: { $0.title == "Left Click Does Not Interrupt Scrolling" }) {
+            leftClickItem.state = leftClickDoesNotInterrupt ? .on : .off
         }
     }
 
