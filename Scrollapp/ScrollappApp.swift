@@ -115,7 +115,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
 
         // Listen for changes from the settings window
-        NotificationCenter.default.addObserver(self, selector: #selector(defaultsDidChange), name: UserDefaults.didChangeNotification, object: nil)
+        for name in ["ScrollappSensitivityChanged", "ScrollappInvertChanged", "ScrollappLeftClickChanged", "ScrollappLaunchChanged", "ScrollappActivationChanged"] {
+            NotificationCenter.default.addObserver(self, selector: #selector(settingsDidChange), name: NSNotification.Name(name), object: nil)
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -475,51 +477,58 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
-    @objc func defaultsDidChange() {
+    @objc func settingsDidChange(_ notification: Notification) {
         let ud = UserDefaults.standard
 
-        let newSensitivity = ud.double(forKey: "scrollSensitivity")
-        let newSens = newSensitivity == 0 ? 1.0 : newSensitivity
-        if scrollSensitivity != newSens {
-            scrollSensitivity = newSens
+        switch notification.name.rawValue {
+        case "ScrollappSensitivityChanged":
+            let newVal = ud.double(forKey: "scrollSensitivity")
+            scrollSensitivity = newVal == 0 ? 1.0 : newVal
             updateMenuSensitivity()
-        }
 
-        let newInvert = ud.bool(forKey: "invertScrollDirection")
-        if isDirectionInverted != newInvert {
-            isDirectionInverted = newInvert
-            if let item = statusItem.menu?.items.first(where: { $0.action == #selector(toggleDirectionInversion) }) {
-                item.state = isDirectionInverted ? .on : .off
-            }
-        }
+        case "ScrollappInvertChanged":
+            isDirectionInverted = ud.bool(forKey: "invertScrollDirection")
+            syncMenuItemState(#selector(toggleDirectionInversion), on: isDirectionInverted)
 
-        let newLeftClick = ud.bool(forKey: "leftClickDoesNotInterrupt")
-        if leftClickDoesNotInterrupt != newLeftClick {
-            leftClickDoesNotInterrupt = newLeftClick
-            if let item = statusItem.menu?.items.first(where: { $0.title == "Left Click Does Not Interrupt Scrolling" }) {
-                item.state = leftClickDoesNotInterrupt ? .on : .off
-            }
-        }
+        case "ScrollappLeftClickChanged":
+            leftClickDoesNotInterrupt = ud.bool(forKey: "leftClickDoesNotInterrupt")
+            syncMenuItemTitle("Left Click Does Not Interrupt Scrolling", on: leftClickDoesNotInterrupt)
 
-        let newLaunch = ud.bool(forKey: "launchAtLogin")
-        if launchAtLogin != newLaunch {
-            launchAtLogin = newLaunch
+        case "ScrollappLaunchChanged":
+            launchAtLogin = ud.bool(forKey: "launchAtLogin")
             updateLoginItemState()
-            if let item = statusItem.menu?.items.first(where: { $0.title == "Launch at Login" }) {
-                item.state = launchAtLogin ? .on : .off
-            }
-        }
+            syncMenuItemTitle("Launch at Login", on: launchAtLogin)
 
-        if let methodRaw = ud.string(forKey: "activationMethod"),
-           let method = ActivationMethod(rawValue: methodRaw),
-           activationMethod != method {
-            activationMethod = method
-            setupMiddleClickListeners()
-            if let activationItem = statusItem.menu?.items.first(where: { $0.title == "Activation Method" }),
-               let submenu = activationItem.submenu {
-                for item in submenu.items {
-                    item.state = (item.representedObject as? ActivationMethod == method) ? .on : .off
-                }
+        case "ScrollappActivationChanged":
+            if let raw = ud.string(forKey: "activationMethod"),
+               let method = ActivationMethod(rawValue: raw) {
+                activationMethod = method
+                setupMiddleClickListeners()
+                syncActivationMenu(method)
+            }
+
+        default:
+            break
+        }
+    }
+
+    func syncMenuItemState(_ action: Selector, on state: Bool) {
+        if let item = statusItem.menu?.items.first(where: { $0.action == action }) {
+            item.state = state ? .on : .off
+        }
+    }
+
+    func syncMenuItemTitle(_ title: String, on state: Bool) {
+        if let item = statusItem.menu?.items.first(where: { $0.title == title }) {
+            item.state = state ? .on : .off
+        }
+    }
+
+    func syncActivationMenu(_ method: ActivationMethod) {
+        if let activationItem = statusItem.menu?.items.first(where: { $0.title == "Activation Method" }),
+           let submenu = activationItem.submenu {
+            for item in submenu.items {
+                item.state = (item.representedObject as? ActivationMethod == method) ? .on : .off
             }
         }
     }

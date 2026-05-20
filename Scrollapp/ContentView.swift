@@ -40,6 +40,9 @@ struct ContentView: View {
                     .fontWeight(.medium)
                 HStack {
                     Slider(value: $sensitivity, in: 0.2...3.0, step: 0.1)
+                        .onChange(of: sensitivity) { _ in
+                            NotificationCenter.default.post(name: NSNotification.Name("ScrollappSensitivityChanged"), object: nil)
+                        }
                     Text(String(format: "%.1fx", sensitivity))
                         .monospacedDigit()
                         .frame(width: 38)
@@ -63,6 +66,9 @@ struct ContentView: View {
                 }
                 .pickerStyle(.menu)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .onChange(of: activationMethod) { _ in
+                    NotificationCenter.default.post(name: NSNotification.Name("ScrollappActivationChanged"), object: nil)
+                }
             }
             .padding(.horizontal)
             .padding(.vertical, 10)
@@ -72,8 +78,17 @@ struct ContentView: View {
             // Toggles
             VStack(spacing: 2) {
                 Toggle("Invert Scrolling Direction", isOn: $invertScroll)
+                    .onChange(of: invertScroll) { _ in
+                        NotificationCenter.default.post(name: NSNotification.Name("ScrollappInvertChanged"), object: nil)
+                    }
                 Toggle("Left Click Does Not Interrupt Scrolling", isOn: $leftClickNoInterrupt)
+                    .onChange(of: leftClickNoInterrupt) { _ in
+                        NotificationCenter.default.post(name: NSNotification.Name("ScrollappLeftClickChanged"), object: nil)
+                    }
                 Toggle("Launch at Login", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { _ in
+                        NotificationCenter.default.post(name: NSNotification.Name("ScrollappLaunchChanged"), object: nil)
+                    }
             }
             .padding(.horizontal)
             .padding(.vertical, 10)
