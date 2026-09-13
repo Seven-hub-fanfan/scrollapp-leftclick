@@ -40,6 +40,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var scrollSensitivity: Double = 1.0  // Default sensitivity multiplier
     var activationMethod: ActivationMethod = .middleClick  // Default activation method
     var leftClickDoesNotInterrupt = false  // Allow left-click without exiting auto-scroll
+    var rightClickDoesNotInterrupt = false // Allow right-click without exiting auto-scroll
+    /// Tracks whether *we* hid the cursor. NSCursor.hide()/unhide() are a counted
+    /// pair scoped to the active app, so an unbalanced hide leaks and makes the
+    /// cursor vanish later (e.g. the moment the settings window activates the app).
+    private var didHideCursor = false
     // Tags used to locate dynamic menu items without relying on (localized) titles.
     static let sensitivityMenuItemTag = 900
     static let activationMenuItemTag = 901
@@ -107,6 +112,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Safety: always unhide cursor on launch in case of unclean exit
         NSCursor.unhide()
+        NSCursor.setHiddenUntilMouseMoves(false)
 
         // Load user preferences
         isDirectionInverted = UserDefaults.standard.bool(forKey: "invertScrollDirection")
@@ -115,6 +121,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if scrollSensitivity == 0 { scrollSensitivity = 1.0 } // Default if not set
         
         leftClickDoesNotInterrupt = UserDefaults.standard.bool(forKey: "leftClickDoesNotInterrupt")
+        rightClickDoesNotInterrupt = UserDefaults.standard.bool(forKey: "rightClickDoesNotInterrupt")
 
         // Load activation method
         if let savedMethod = UserDefaults.standard.string(forKey: "activationMethod"),
@@ -137,7 +144,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
 
         // Listen for changes from the settings window
-        for name in ["ScrollappSensitivityChanged", "ScrollappInvertChanged", "ScrollappLeftClickChanged", "ScrollappLaunchChanged", "ScrollappActivationChanged"] {
+        for name in ["ScrollappSensitivityChanged", "ScrollappInvertChanged", "ScrollappLeftClickChanged", "ScrollappRightClickChanged", "ScrollappLaunchChanged", "ScrollappActivationChanged"] {
             NotificationCenter.default.addObserver(self, selector: #selector(settingsDidChange), name: NSNotification.Name(name), object: nil)
         }
     }
@@ -211,6 +218,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         leftClickItem.state = leftClickDoesNotInterrupt ? .on : .off
         menu.addItem(leftClickItem)
 
+        // Add right-click does not interrupt toggle
+        let rightClickItem = NSMenuItem(title: L10n.t("menu.rightClickNoInterrupt"), action: #selector(toggleRightClickInterrupt), keyEquivalent: "")
+        rightClickItem.state = rightClickDoesNotInterrupt ? .on : .off
+        menu.addItem(rightClickItem)
+
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: L10n.t("menu.settings"), action: #selector(showSettingsWindow), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: L10n.t("menu.about"), action: #selector(showAbout), keyEquivalent: ""))
@@ -263,6 +275,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         image.unlockFocus()
 
         scrollCursor = NSCursor(image: image, hotSpot: NSPoint(x: 10, y: 10))
+    }
+
+    // MARK: - Cursor handling
+
+    /// The custom scroll cursor hides the pointer, which is unacceptable when the
+    /// user still needs to aim and click during auto-scroll. So whenever a
+    /// "click does not interrupt" option is on, keep the normal arrow visible.
+    var shouldUseScrollCursor: Bool {
+        return !leftClickDoesNotInterrupt && !rightClickDoesNotInterrupt
+    }
+
+    /// Apply the custom cursor (idempotent, safe to call from the scroll timer).
+    func applyScrollCursor() {
+        guard shouldUseScrollCursor else {
+            restoreCursor()
+            return
+        }
+        if !didHideCursor {
+            NSCursor.hide()
+            didHideCursor = true
+        }
+        scrollCursor?.set()
+    }
+
+    /// Undo everything applyScrollCursor() did. Balanced exactly once.
+    func restoreCursor() {
+        if didHideCursor {
+            NSCursor.unhide()
+            didHideCursor = false
+        }
+        NSCursor.arrow.set()
     }
 
     var lastClickTime: Date?
@@ -328,13 +371,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         stopAutoScroll()
         originalPoint = point
         isAutoScrolling = true
-        NSCursor.hide()
-        scrollCursor?.set()
+        applyScrollCursor()
         showScrollHUD()
 
         scrollTimer = Timer.scheduledTimer(withTimeInterval: 0.01, repeats: true) { [weak self] _ in
             self?.performScroll()
-            self?.scrollCursor?.set() // keep forcing cursor
+            self?.applyScrollCursor() // keep forcing cursor (no-op when disabled)
         }
         RunLoop.current.add(scrollTimer!, forMode: .common)
     }
@@ -403,14 +445,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         originalPoint = NSEvent.mouseLocation
         isAutoScrolling = true
         
-        // Show custom cursor
-        NSCursor.hide()
-        scrollCursor?.set()
+        // Show custom cursor (unless a "click does not interrupt" option is on)
+        applyScrollCursor()
         
         // Start timer for scrolling
         scrollTimer = Timer.scheduledTimer(withTimeInterval: 0.01, repeats: true) { [weak self] _ in
             self?.performScroll()
-            self?.scrollCursor?.set() // keep forcing cursor
+            self?.applyScrollCursor() // keep forcing cursor (no-op when disabled)
         }
         RunLoop.current.add(scrollTimer!, forMode: .common)
         
@@ -528,15 +569,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let window = NSWindow(contentViewController: hostingController)
             window.title = L10n.t("settings.windowTitle")
             window.styleMask = [.titled, .closable, .miniaturizable]
-            window.setContentSize(NSSize(width: 340, height: 440))
+            window.setContentSize(NSSize(width: 340, height: 470))
             window.isReleasedWhenClosed = false
             window.center()
             window.delegate = self
             settingsWindow = window
         }
+        // The settings window activates the app, which is exactly when a leaked
+        // NSCursor.hide() would surface. Make sure the pointer is normal here.
+        if isAutoScrolling { stopAutoScroll() }
+        restoreCursor()
         NSApp.setActivationPolicy(.regular)
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        // Belt and braces: never leave the app active with a hidden/custom cursor.
+        if !isAutoScrolling {
+            restoreCursor()
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -560,6 +612,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         case "ScrollappLeftClickChanged":
             leftClickDoesNotInterrupt = ud.bool(forKey: "leftClickDoesNotInterrupt")
             syncMenuItemState(#selector(toggleLeftClickInterrupt), on: leftClickDoesNotInterrupt)
+            refreshCursorForCurrentState()
+
+        case "ScrollappRightClickChanged":
+            rightClickDoesNotInterrupt = ud.bool(forKey: "rightClickDoesNotInterrupt")
+            syncMenuItemState(#selector(toggleRightClickInterrupt), on: rightClickDoesNotInterrupt)
+            refreshCursorForCurrentState()
 
         case "ScrollappLaunchChanged":
             launchAtLogin = ud.bool(forKey: "launchAtLogin")
@@ -616,7 +674,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func stopAutoScroll() {
         scrollTimer?.invalidate()
         scrollTimer = nil
-        NSCursor.unhide()
+        restoreCursor()
         isAutoScrolling = false
         isTrackpadMode = false
         originalPoint = nil
@@ -670,6 +728,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
 
+            // Same for right-click (both options can be enabled at the same time)
+            if self.rightClickDoesNotInterrupt && event.type == .rightMouseDown {
+                return
+            }
+
             // For all other clicks, stop auto-scroll
             self.stopAutoScroll()
         }
@@ -706,6 +769,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Update menu item state
         syncMenuItemState(#selector(toggleLeftClickInterrupt), on: leftClickDoesNotInterrupt)
+        refreshCursorForCurrentState()
+    }
+
+    @objc func toggleRightClickInterrupt() {
+        rightClickDoesNotInterrupt = !rightClickDoesNotInterrupt
+        UserDefaults.standard.set(rightClickDoesNotInterrupt, forKey: "rightClickDoesNotInterrupt")
+
+        syncMenuItemState(#selector(toggleRightClickInterrupt), on: rightClickDoesNotInterrupt)
+        refreshCursorForCurrentState()
+    }
+
+    /// Re-evaluate the cursor when the options change mid-scroll.
+    func refreshCursorForCurrentState() {
+        guard isAutoScrolling else { return }
+        applyScrollCursor()
     }
 
     func updateLoginItemState() {

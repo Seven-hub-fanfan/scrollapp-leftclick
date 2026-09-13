@@ -4,6 +4,7 @@ struct ContentView: View {
     @AppStorage("scrollSensitivity") private var sensitivity: Double = 1.0
     @AppStorage("invertScrollDirection") private var invertScroll = false
     @AppStorage("leftClickDoesNotInterrupt") private var leftClickNoInterrupt = false
+    @AppStorage("rightClickDoesNotInterrupt") private var rightClickNoInterrupt = false
     @AppStorage("launchAtLogin") private var launchAtLogin = false
     @AppStorage("activationMethod") private var activationMethod = "Middle Click"
 
@@ -87,6 +88,10 @@ struct ContentView: View {
                     .onChange(of: leftClickNoInterrupt) { _ in
                         NotificationCenter.default.post(name: NSNotification.Name("ScrollappLeftClickChanged"), object: nil)
                     }
+                Toggle(L10n.t("settings.rightClickNoInterrupt"), isOn: $rightClickNoInterrupt)
+                    .onChange(of: rightClickNoInterrupt) { _ in
+                        NotificationCenter.default.post(name: NSNotification.Name("ScrollappRightClickChanged"), object: nil)
+                    }
                 Toggle(L10n.t("settings.launchAtLogin"), isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _ in
                         NotificationCenter.default.post(name: NSNotification.Name("ScrollappLaunchChanged"), object: nil)
@@ -115,6 +120,6 @@ struct ContentView: View {
             .padding(.horizontal)
             .padding(.vertical, 12)
         }
-        .frame(width: 340, height: 440)
+        .frame(width: 340, height: 470)
     }
 }
