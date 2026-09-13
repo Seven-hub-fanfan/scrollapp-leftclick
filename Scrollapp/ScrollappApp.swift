@@ -40,6 +40,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var scrollSensitivity: Double = 1.0  // Default sensitivity multiplier
     var activationMethod: ActivationMethod = .middleClick  // Default activation method
     var leftClickDoesNotInterrupt = false  // Allow left-click without exiting auto-scroll
+    // Tags used to locate dynamic menu items without relying on (localized) titles.
+    static let sensitivityMenuItemTag = 900
+    static let activationMenuItemTag = 901
+
     var settingsWindow: NSWindow?
     var hudWindow: NSWindow?
 
@@ -52,6 +56,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         case button5 = "Mouse Button 5"
         case doubleMiddleClick = "Double Middle Click"
         
+        /// Localized label for menus / pickers. `rawValue` stays English and is
+        /// the persisted value in UserDefaults — never localize it.
+        var displayName: String {
+            switch self {
+            case .middleClick: return L10n.t("activation.middleClick")
+            case .shiftMiddleClick: return L10n.t("activation.shiftMiddleClick")
+            case .cmdMiddleClick: return L10n.t("activation.cmdMiddleClick")
+            case .optionMiddleClick: return L10n.t("activation.optionMiddleClick")
+            case .button4: return L10n.t("activation.button4")
+            case .button5: return L10n.t("activation.button5")
+            case .doubleMiddleClick: return L10n.t("activation.doubleMiddleClick")
+            }
+        }
+
         var buttonNumber: Int? {
             switch self {
             case .middleClick, .shiftMiddleClick, .cmdMiddleClick, .optionMiddleClick, .doubleMiddleClick:
@@ -135,11 +153,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Start/Stop Auto-Scroll", action: #selector(toggleTrackpadMode), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: L10n.t("menu.toggle"), action: #selector(toggleTrackpadMode), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         
         // Add sensitivity slider
-        let sensitivityItem = NSMenuItem(title: String(format: "Scroll Speed: %.1fx", scrollSensitivity), action: nil, keyEquivalent: "")
+        let sensitivityItem = NSMenuItem(title: L10n.t("menu.scrollSpeed", scrollSensitivity), action: nil, keyEquivalent: "")
+        sensitivityItem.tag = Self.sensitivityMenuItemTag
         let sensitivityView = NSView(frame: NSRect(x: 0, y: 0, width: 250, height: 30))
         
         let slider = NSSlider(frame: NSRect(x: 20, y: 5, width: 150, height: 20))
@@ -164,11 +183,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Add activation method submenu
         let activationMenu = NSMenu()
-        let activationItem = NSMenuItem(title: "Activation Method", action: nil, keyEquivalent: "")
+        let activationItem = NSMenuItem(title: L10n.t("menu.activationMethod"), action: nil, keyEquivalent: "")
+        activationItem.tag = Self.activationMenuItemTag
         activationItem.submenu = activationMenu
         
         for method in ActivationMethod.allCases {
-            let methodItem = NSMenuItem(title: method.rawValue, action: #selector(selectActivationMethod(_:)), keyEquivalent: "")
+            let methodItem = NSMenuItem(title: method.displayName, action: #selector(selectActivationMethod(_:)), keyEquivalent: "")
             methodItem.representedObject = method
             methodItem.state = (method == activationMethod) ? .on : .off
             activationMenu.addItem(methodItem)
@@ -177,37 +197,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(activationItem)
         
         // Add inverted direction toggle option - reworded to match new default
-        let invertItem = NSMenuItem(title: "Invert Scrolling Direction", action: #selector(toggleDirectionInversion), keyEquivalent: "")
+        let invertItem = NSMenuItem(title: L10n.t("menu.invertDirection"), action: #selector(toggleDirectionInversion), keyEquivalent: "")
         invertItem.state = isDirectionInverted ? .on : .off
         menu.addItem(invertItem)
         
         // Add launch at login toggle
-        let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+        let launchItem = NSMenuItem(title: L10n.t("menu.launchAtLogin"), action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         launchItem.state = launchAtLogin ? .on : .off
         menu.addItem(launchItem)
 
         // Add left-click does not interrupt toggle
-        let leftClickItem = NSMenuItem(title: "Left Click Does Not Interrupt Scrolling", action: #selector(toggleLeftClickInterrupt), keyEquivalent: "")
+        let leftClickItem = NSMenuItem(title: L10n.t("menu.leftClickNoInterrupt"), action: #selector(toggleLeftClickInterrupt), keyEquivalent: "")
         leftClickItem.state = leftClickDoesNotInterrupt ? .on : .off
         menu.addItem(leftClickItem)
 
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Settings...", action: #selector(showSettingsWindow), keyEquivalent: ","))
-        menu.addItem(NSMenuItem(title: "About Scrollapp", action: #selector(showAbout), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: L10n.t("menu.settings"), action: #selector(showSettingsWindow), keyEquivalent: ","))
+        menu.addItem(NSMenuItem(title: L10n.t("menu.about"), action: #selector(showAbout), keyEquivalent: ""))
         
         let methodsMenu = NSMenu()
-        let methodsItem = NSMenuItem(title: "Activation Methods", action: nil, keyEquivalent: "")
+        let methodsItem = NSMenuItem(title: L10n.t("menu.activationMethods"), action: nil, keyEquivalent: "")
         methodsItem.submenu = methodsMenu
         
-        methodsMenu.addItem(NSMenuItem(title: "Mouse - Configurable button/modifier (see Activation Method)", action: nil, keyEquivalent: ""))
-        methodsMenu.addItem(NSMenuItem(title: "Option + Scroll - Start auto-scroll (trackpad)", action: nil, keyEquivalent: ""))
-        methodsMenu.addItem(NSMenuItem(title: "Menu Bar - Use the menu option above", action: nil, keyEquivalent: ""))
-        methodsMenu.addItem(NSMenuItem(title: "Click - Stop auto-scroll", action: nil, keyEquivalent: ""))
+        methodsMenu.addItem(NSMenuItem(title: L10n.t("menu.help.mouse"), action: nil, keyEquivalent: ""))
+        methodsMenu.addItem(NSMenuItem(title: L10n.t("menu.help.trackpad"), action: nil, keyEquivalent: ""))
+        methodsMenu.addItem(NSMenuItem(title: L10n.t("menu.help.menuBar"), action: nil, keyEquivalent: ""))
+        methodsMenu.addItem(NSMenuItem(title: L10n.t("menu.help.click"), action: nil, keyEquivalent: ""))
         
         menu.addItem(methodsItem)
         
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: L10n.t("menu.quit"), action: #selector(quitApp), keyEquivalent: "q"))
         statusItem.menu = menu
     }
 
@@ -418,7 +438,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         hud.hasShadow = true
         hud.center()
 
-        let textField = NSTextField(labelWithString: "Auto-Scroll Active")
+        let textField = NSTextField(labelWithString: L10n.t("hud.active"))
         textField.font = NSFont.boldSystemFont(ofSize: 18)
         textField.textColor = .white
         textField.alignment = .center
@@ -441,8 +461,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func showTrackpadModeNotification() {
         let content = UNMutableNotificationContent()
-        content.title = "Auto-Scroll Active"
-        content.body = "Move cursor to control scrolling. Click anywhere to exit."
+        content.title = L10n.t("hud.active")
+        content.body = L10n.t("notification.body")
         content.sound = UNNotificationSound.default
         
         let request = UNNotificationRequest(
@@ -463,8 +483,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.set(scrollSensitivity, forKey: "scrollSensitivity")
         
         // Update the label and menu item title
-        if let sensitivityItem = statusItem.menu?.items.first(where: { $0.title.starts(with: "Scroll Speed") }) {
-            sensitivityItem.title = String(format: "Scroll Speed: %.1fx", scrollSensitivity)
+        if let sensitivityItem = statusItem.menu?.item(withTag: Self.sensitivityMenuItemTag) {
+            sensitivityItem.title = L10n.t("menu.scrollSpeed", scrollSensitivity)
             
             if let view = sensitivityItem.view,
                let label = view.viewWithTag(100) as? NSTextField {
@@ -480,7 +500,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.set(method.rawValue, forKey: "activationMethod")
         
         // Update menu item states
-        if let activationItem = statusItem.menu?.items.first(where: { $0.title == "Activation Method" }),
+        if let activationItem = statusItem.menu?.item(withTag: Self.activationMenuItemTag),
            let submenu = activationItem.submenu {
             for item in submenu.items {
                 item.state = (item.representedObject as? ActivationMethod == method) ? .on : .off
@@ -493,11 +513,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func showAbout() {
         let alert = NSAlert()
-        alert.messageText = "About Scrollapp"
+        alert.messageText = L10n.t("about.title")
         
-        alert.informativeText = "Scrollapp enables auto-scrolling on macOS.\n\nHow to activate:\n• Mouse: Configurable button/modifier (see Activation Method in menu)\n• Trackpad: Hold Option key and scroll with two fingers\n• Menu: Use the menu bar icon and select 'Start/Stop Auto-Scroll'\n\nHow to stop:\n• Click anywhere to exit auto-scroll mode\n• Use your configured activation method again\n\nWhile active, move your cursor to control scroll speed and direction.\n\nAdjust scroll speed using the slider in the menu bar (0.2x - 3.0x).\nSpeeds below 1.0x are exponentially slower for fine control.\n\nConfigure your preferred activation method in the 'Activation Method' submenu to avoid conflicts with browser link opening."
+        alert.informativeText = L10n.t("about.bodyMenu")
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: L10n.t("alert.ok"))
         alert.runModal()
     }
 
@@ -506,7 +526,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let contentView = ContentView()
             let hostingController = NSHostingController(rootView: contentView)
             let window = NSWindow(contentViewController: hostingController)
-            window.title = "Scrollapp"
+            window.title = L10n.t("settings.windowTitle")
             window.styleMask = [.titled, .closable, .miniaturizable]
             window.setContentSize(NSSize(width: 340, height: 440))
             window.isReleasedWhenClosed = false
@@ -539,12 +559,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         case "ScrollappLeftClickChanged":
             leftClickDoesNotInterrupt = ud.bool(forKey: "leftClickDoesNotInterrupt")
-            syncMenuItemTitle("Left Click Does Not Interrupt Scrolling", on: leftClickDoesNotInterrupt)
+            syncMenuItemState(#selector(toggleLeftClickInterrupt), on: leftClickDoesNotInterrupt)
 
         case "ScrollappLaunchChanged":
             launchAtLogin = ud.bool(forKey: "launchAtLogin")
             updateLoginItemState()
-            syncMenuItemTitle("Launch at Login", on: launchAtLogin)
+            syncMenuItemState(#selector(toggleLaunchAtLogin), on: launchAtLogin)
 
         case "ScrollappActivationChanged":
             if let raw = ud.string(forKey: "activationMethod"),
@@ -565,14 +585,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func syncMenuItemTitle(_ title: String, on state: Bool) {
-        if let item = statusItem.menu?.items.first(where: { $0.title == title }) {
-            item.state = state ? .on : .off
-        }
-    }
-
     func syncActivationMenu(_ method: ActivationMethod) {
-        if let activationItem = statusItem.menu?.items.first(where: { $0.title == "Activation Method" }),
+        if let activationItem = statusItem.menu?.item(withTag: Self.activationMenuItemTag),
            let submenu = activationItem.submenu {
             for item in submenu.items {
                 item.state = (item.representedObject as? ActivationMethod == method) ? .on : .off
@@ -581,8 +595,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func updateMenuSensitivity() {
-        guard let item = statusItem.menu?.items.first(where: { $0.title.starts(with: "Scroll Speed") }) else { return }
-        item.title = String(format: "Scroll Speed: %.1fx", scrollSensitivity)
+        guard let item = statusItem.menu?.item(withTag: Self.sensitivityMenuItemTag) else { return }
+        item.title = L10n.t("menu.scrollSpeed", scrollSensitivity)
         if let view = item.view {
             if let label = view.viewWithTag(100) as? NSTextField {
                 label.stringValue = String(format: "%.1fx", scrollSensitivity)
@@ -683,9 +697,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         updateLoginItemState()
 
         // Update menu item state
-        if let launchItem = statusItem.menu?.items.first(where: { $0.title == "Launch at Login" }) {
-            launchItem.state = launchAtLogin ? .on : .off
-        }
+        syncMenuItemState(#selector(toggleLaunchAtLogin), on: launchAtLogin)
     }
 
     @objc func toggleLeftClickInterrupt() {
@@ -693,9 +705,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.set(leftClickDoesNotInterrupt, forKey: "leftClickDoesNotInterrupt")
 
         // Update menu item state
-        if let leftClickItem = statusItem.menu?.items.first(where: { $0.title == "Left Click Does Not Interrupt Scrolling" }) {
-            leftClickItem.state = leftClickDoesNotInterrupt ? .on : .off
-        }
+        syncMenuItemState(#selector(toggleLeftClickInterrupt), on: leftClickDoesNotInterrupt)
     }
 
     func updateLoginItemState() {
@@ -733,11 +743,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if !trusted {
             // Show alert asking user to grant permissions
             let alert = NSAlert()
-            alert.messageText = "Accessibility Permissions Required"
-            alert.informativeText = "Scrollapp needs Accessibility permissions to enable auto-scrolling.\n\nPlease:\n1. Click 'Open System Preferences'\n2. Unlock the settings if needed\n3. Check the box next to Scrollapp\n4. Restart the app"
+            alert.messageText = L10n.t("permission.title")
+            alert.informativeText = L10n.t("permission.body")
             alert.alertStyle = .warning
-            alert.addButton(withTitle: "Open System Preferences")
-            alert.addButton(withTitle: "Skip")
+            alert.addButton(withTitle: L10n.t("permission.open"))
+            alert.addButton(withTitle: L10n.t("permission.skip"))
             
             let response = alert.runModal()
             
