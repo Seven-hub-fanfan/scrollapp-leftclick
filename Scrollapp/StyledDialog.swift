@@ -65,28 +65,85 @@ private struct DialogButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(style == .primary ? .white : Style.primaryText)
-                .frame(maxWidth: .infinity)
-                .frame(height: 32)
-                .background(
-                    Group {
-                        if style == .primary {
-                            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                .fill(Style.glossyBlack)
-                                .shadow(color: Color.black.opacity(0.25), radius: 5, x: 0, y: 3)
-                        } else {
-                            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                .fill(Style.card)
-                                .raised(radius: 15, darkBlur: 6, lightBlur: 5, offset: 3)
-                        }
-                    }
-                )
-                .contentShape(Rectangle())
+        ZStack {
+            Group {
+                if style == .primary {
+                    RoundedRectangle(cornerRadius: 15, style: .continuous)
+                        .fill(Style.glossyBlack)
+                        .shadow(color: Color.black.opacity(0.25), radius: 5, x: 0, y: 3)
+                } else {
+                    RoundedRectangle(cornerRadius: 15, style: .continuous)
+                        .fill(Style.card)
+                        .raised(radius: 15, darkBlur: 6, lightBlur: 5, offset: 3)
+                }
+            }
+            // The clickable layer is a real AppKit NSButton: SwiftUI `Button`
+            // never received mouse-down inside this dialog (LSUIElement app +
+            // modal panel), so the action is driven through AppKit's own
+            // target/action path instead, which always fires.
+            NativeButton(title: title,
+                         isPrimary: style == .primary,
+                         action: action)
         }
-        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .frame(height: 32)
+    }
+}
+
+/// A button that acts on the very first click even when the app / window was
+/// not active. Without this the dialog swallowed every click as a mere
+/// activation click, which is what made the "OK" button look dead.
+private final class FirstMouseButton: NSButton {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+/// Thin AppKit button used as the hit-testing / action layer on top of the
+/// neumorphic background. Draws only its title, never a bezel.
+private struct NativeButton: NSViewRepresentable {
+    let title: String
+    let isPrimary: Bool
+    let action: () -> Void
+
+    final class Coordinator: NSObject {
+        var action: () -> Void
+        init(action: @escaping () -> Void) { self.action = action }
+        @objc func fire(_ sender: Any?) { action() }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(action: action) }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = FirstMouseButton(frame: .zero)
+        button.isBordered = false
+        button.bezelStyle = .regularSquare
+        button.setButtonType(.momentaryChange)
+        button.focusRingType = .none
+        button.wantsLayer = true
+        button.layer?.backgroundColor = .clear
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.fire(_:))
+        apply(to: button)
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {
+        context.coordinator.action = action
+        apply(to: button)
+    }
+
+    private func apply(to button: NSButton) {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        button.attributedTitle = NSAttributedString(
+            string: title,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+                .foregroundColor: isPrimary
+                    ? NSColor.white
+                    : NSColor(calibratedWhite: 0.18, alpha: 1.0),
+                .paragraphStyle: paragraph
+            ]
+        )
     }
 }
 
@@ -135,21 +192,19 @@ final class StyledDialog: NSObject, NSWindowDelegate {
         )
 
         let hosting = NSHostingController(rootView: view)
-        // NSPanel + .nonactivatingPanel is the piece that makes this work inside an
-        // LSUIElement app: such a panel can become the key window without the app
-        // being active, so SwiftUI buttons actually receive the click. A plain
-        // NSWindow here stayed non-key and every click was swallowed by activation.
-        let window = NSPanel(contentViewController: hosting)
-        window.styleMask = [.titled, .closable, .fullSizeContentView, .nonactivatingPanel]
-        window.becomesKeyOnlyIfNeeded = false
-        window.worksWhenModal = true
+        let window = NSWindow(contentViewController: hosting)
+        window.styleMask = [.titled, .closable, .fullSizeContentView]
         window.hidesOnDeactivate = false
         window.title = ""
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.appearance = NSAppearance(named: .aqua)
         window.backgroundColor = NSColor(calibratedWhite: 0.929, alpha: 1.0)
-        window.isMovableByWindowBackground = true
+        // Must stay false. With background dragging on, AppKit's window-drag
+        // tracking grabs the mouse-down before it ever reaches the buttons —
+        // that is exactly why the "OK" button looked dead. Same trap as the
+        // speed slider in the main window.
+        window.isMovableByWindowBackground = false
         // Keep a *real* close button and hide the two permanently-disabled dots
         // (those grey circles looked like fake decoration).
         window.standardWindowButton(.closeButton)?.isHidden = false
@@ -223,8 +278,14 @@ final class AboutPanelController {
     static let shared = AboutPanelController()
 
     func show(body: String) {
-        StyledDialog.run(title: L10n.t("about.title"),
-                         message: body,
-                         primaryTitle: L10n.t("alert.ok"))
+        // Presented on the next main-queue turn: running a nested modal loop
+        // directly inside an NSMenu action / SwiftUI button handler leaves the
+        // previous tracking loop unwinding and the dialog ends up unable to
+        // receive mouse events.
+        DispatchQueue.main.async {
+            StyledDialog.run(title: L10n.t("about.title"),
+                             message: body,
+                             primaryTitle: L10n.t("alert.ok"))
+        }
     }
 }
