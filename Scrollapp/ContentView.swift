@@ -5,7 +5,7 @@ import SwiftUI
 // All metrics below are measured off the design mock (769×1149 px @2.083x,
 // i.e. a 369×552 pt window with a 30 pt title bar → 369×522 pt content area).
 
-private enum Style {
+enum Style {
     static let windowWidth: CGFloat = 370
     static let windowHeight: CGFloat = 522        // content area, title bar excluded
 
@@ -35,7 +35,7 @@ private enum Style {
 }
 
 /// Applies the soft-UI double shadow used by every raised surface.
-private struct Raised: ViewModifier {
+struct Raised: ViewModifier {
     var radius: CGFloat
     var darkBlur: CGFloat
     var lightBlur: CGFloat
@@ -48,14 +48,14 @@ private struct Raised: ViewModifier {
     }
 }
 
-private extension View {
+extension View {
     func raised(radius: CGFloat, darkBlur: CGFloat = 6, lightBlur: CGFloat = 5, offset: CGFloat = 3) -> some View {
         modifier(Raised(radius: radius, darkBlur: darkBlur, lightBlur: lightBlur, offset: offset))
     }
 }
 
 /// Section container card.
-private struct Card<Content: View>: View {
+struct Card<Content: View>: View {
     var padV: CGFloat = 10
     @ViewBuilder var content: Content
 
@@ -72,7 +72,7 @@ private struct Card<Content: View>: View {
     }
 }
 
-private struct CardLabel: View {
+struct CardLabel: View {
     let text: String
     var body: some View {
         Text(text)
@@ -83,7 +83,7 @@ private struct CardLabel: View {
 
 // MARK: - App icon (white plinth + glossy black tile)
 
-private struct AppIconTile: View {
+struct AppIconTile: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 15, style: .continuous)
@@ -503,12 +503,7 @@ struct ContentView: View {
     private var bottomBar: some View {
         HStack(spacing: 0) {
             PillButton(title: L10n.t("settings.about"), systemImage: "info.circle.fill", filledIcon: true) {
-                let alert = NSAlert()
-                alert.messageText = L10n.t("about.title")
-                alert.informativeText = L10n.t("about.bodySettings")
-                alert.alertStyle = .informational
-                alert.addButton(withTitle: L10n.t("alert.ok"))
-                alert.runModal()
+                AboutPanelController.shared.show(body: L10n.t("about.bodySettings"))
             }
             Spacer(minLength: 0)
             PillButton(title: L10n.t("settings.quit"), systemImage: "rectangle.portrait.and.arrow.right", filledIcon: false) {

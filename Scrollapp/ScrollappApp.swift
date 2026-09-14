@@ -553,13 +553,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func showAbout() {
-        let alert = NSAlert()
-        alert.messageText = L10n.t("about.title")
-        
-        alert.informativeText = L10n.t("about.bodyMenu")
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: L10n.t("alert.ok"))
-        alert.runModal()
+        AboutPanelController.shared.show(body: L10n.t("about.bodyMenu"))
     }
 
     @objc func showSettingsWindow() {
@@ -575,7 +569,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             window.appearance = NSAppearance(named: .aqua)
             window.titlebarAppearsTransparent = true
             window.backgroundColor = NSColor(calibratedWhite: 0.925, alpha: 1.0)
-            window.isMovableByWindowBackground = true
+            // Must stay false: with background dragging enabled, AppKit steals the
+            // drag before SwiftUI's slider gesture sees it, so dragging the speed
+            // slider used to drag / flicker the whole window. The title bar still drags.
+            window.isMovableByWindowBackground = false
             window.isReleasedWhenClosed = false
             window.center()
             window.delegate = self
@@ -826,21 +823,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         if !trusted {
             // Show alert asking user to grant permissions
-            let alert = NSAlert()
-            alert.messageText = L10n.t("permission.title")
-            alert.informativeText = L10n.t("permission.body")
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: L10n.t("permission.open"))
-            alert.addButton(withTitle: L10n.t("permission.skip"))
-            
-            let response = alert.runModal()
-            
-            if response == .alertFirstButtonReturn {
+            let openSettings = StyledDialog.run(title: L10n.t("permission.title"),
+                                                message: L10n.t("permission.body"),
+                                                primaryTitle: L10n.t("permission.open"),
+                                                secondaryTitle: L10n.t("permission.skip"),
+                                                isWarning: true)
+
+            if openSettings {
                 // Open Accessibility preferences
                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
                     NSWorkspace.shared.open(url)
-                        }
-                    }
+                }
+            }
         }
     }
 }

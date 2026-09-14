@@ -12,8 +12,8 @@ cd "$(dirname "$0")/.."
 SDK_PATH="$(xcrun --show-sdk-path)"
 APP_DIR="build/Scrollapp.app"
 SRC="Scrollapp"
-VERSION="2.1"
-BUILD="13"
+VERSION="2.2"
+BUILD="15"
 
 echo "==> Cleaning $APP_DIR"
 rm -rf "$APP_DIR"
@@ -28,7 +28,7 @@ xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos15.0 \
   -framework SwiftUI -framework AppKit -framework Cocoa \
   -framework UserNotifications -framework ServiceManagement -framework ApplicationServices \
   -o "$APP_DIR/Contents/MacOS/Scrollapp" \
-  "$SRC/ScrollappApp.swift" "$SRC/ContentView.swift" "$SRC/Localization.swift"
+  "$SRC/ScrollappApp.swift" "$SRC/ContentView.swift" "$SRC/Localization.swift" "$SRC/StyledDialog.swift"
 
 echo "==> Writing Info.plist"
 cat > "$APP_DIR/Contents/Info.plist" <<PLIST
