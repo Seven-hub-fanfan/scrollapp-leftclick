@@ -823,13 +823,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         if !trusted {
             // Show alert asking user to grant permissions
-            let openSettings = StyledDialog.run(title: L10n.t("permission.title"),
-                                                message: L10n.t("permission.body"),
-                                                primaryTitle: L10n.t("permission.open"),
-                                                secondaryTitle: L10n.t("permission.skip"),
-                                                isWarning: true)
-
-            if openSettings {
+            StyledDialog.present(title: L10n.t("permission.title"),
+                                 message: L10n.t("permission.body"),
+                                 primaryTitle: L10n.t("permission.open"),
+                                 secondaryTitle: L10n.t("permission.skip"),
+                                 isWarning: true) { openSettings in
+                guard openSettings else { return }
                 // Open Accessibility preferences
                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
                     NSWorkspace.shared.open(url)

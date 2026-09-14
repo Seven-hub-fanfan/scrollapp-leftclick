@@ -149,37 +149,51 @@ private struct NativeButton: NSViewRepresentable {
 
 // MARK: - Presenter
 
-/// Shows the styled dialog as an application-modal window and reports whether
-/// the primary button was chosen (drop-in replacement for `NSAlert.runModal()`).
+/// Shows the styled dialog as a plain, **non-modal** key window and reports the
+/// chosen button through a completion handler.
+///
+/// Deliberately no `NSApp.runModal` here: inside this menu-bar app the nested
+/// modal session ended up blocking event delivery entirely — the buttons still
+/// highlighted (SwiftUI drew the pressed state) but neither the button action
+/// nor the red close button ever ran. A normal window plus a callback keeps the
+/// regular app run loop in charge, which always delivers events.
 final class StyledDialog: NSObject, NSWindowDelegate {
 
-    private static var live: StyledDialog?
+    /// Keeps presented dialogs alive until they are dismissed.
+    private static var live: Set<StyledDialog> = []
 
-    private var primaryChosen = false
-    private var panel: NSWindow?
+    private var window: NSWindow?
     private var keyMonitor: Any?
+    private var completion: ((Bool) -> Void)?
+    private var previousPolicy: NSApplication.ActivationPolicy = .accessory
+    private var finished = false
 
-    @discardableResult
-    static func run(title: String,
-                    message: String,
-                    primaryTitle: String,
-                    secondaryTitle: String? = nil,
-                    isWarning: Bool = false) -> Bool {
+    static func present(title: String,
+                        message: String,
+                        primaryTitle: String,
+                        secondaryTitle: String? = nil,
+                        isWarning: Bool = false,
+                        completion: ((Bool) -> Void)? = nil) {
         let dialog = StyledDialog()
-        live = dialog
-        defer { live = nil }
-        return dialog.present(title: title,
-                              message: message,
-                              primaryTitle: primaryTitle,
-                              secondaryTitle: secondaryTitle,
-                              isWarning: isWarning)
+        live.insert(dialog)
+        dialog.completion = completion
+        // Next run loop turn: presenting straight out of an NSMenu action or a
+        // SwiftUI button handler happens while a tracking loop is still
+        // unwinding, and the fresh window can miss its first events.
+        DispatchQueue.main.async {
+            dialog.show(title: title,
+                        message: message,
+                        primaryTitle: primaryTitle,
+                        secondaryTitle: secondaryTitle,
+                        isWarning: isWarning)
+        }
     }
 
-    private func present(title: String,
-                         message: String,
-                         primaryTitle: String,
-                         secondaryTitle: String?,
-                         isWarning: Bool) -> Bool {
+    private func show(title: String,
+                      message: String,
+                      primaryTitle: String,
+                      secondaryTitle: String?,
+                      isWarning: Bool) {
 
         let view = StyledDialogView(
             title: title,
@@ -193,32 +207,31 @@ final class StyledDialog: NSObject, NSWindowDelegate {
 
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
-        window.styleMask = [.titled, .closable, .fullSizeContentView]
+        window.styleMask = [.titled, .closable]
+        window.isReleasedWhenClosed = false
         window.hidesOnDeactivate = false
         window.title = ""
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.appearance = NSAppearance(named: .aqua)
         window.backgroundColor = NSColor(calibratedWhite: 0.929, alpha: 1.0)
-        // Must stay false. With background dragging on, AppKit's window-drag
-        // tracking grabs the mouse-down before it ever reaches the buttons —
-        // that is exactly why the "OK" button looked dead. Same trap as the
-        // speed slider in the main window.
+        // Must stay false: window background dragging makes AppKit grab the
+        // mouse-down before the buttons see it (same trap as the speed slider).
         window.isMovableByWindowBackground = false
-        // Keep a *real* close button and hide the two permanently-disabled dots
-        // (those grey circles looked like fake decoration).
+        // A real, working close button; the two permanently disabled dots that
+        // used to sit next to it only looked like decoration.
         window.standardWindowButton(.closeButton)?.isHidden = false
         window.standardWindowButton(.miniaturizeButton)?.isHidden = true
         window.standardWindowButton(.zoomButton)?.isHidden = true
-        window.level = .modalPanel
+        window.level = .floating
         window.setContentSize(hosting.view.fittingSize)
         window.center()
         window.delegate = self
-        panel = window
+        self.window = window
 
-        // Esc / Return work like a normal alert.
+        // Esc / Return behave like a stock alert.
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self else { return event }
+            guard let self, event.window === self.window else { return event }
             switch event.keyCode {
             case 53: self.finish(primary: false); return nil            // Esc
             case 36, 76: self.finish(primary: true); return nil         // Return / Enter
@@ -226,47 +239,44 @@ final class StyledDialog: NSObject, NSWindowDelegate {
             }
         }
 
-        // LSUIElement apps cannot truly activate while staying .accessory, and an
-        // inactive window never hands clicks to SwiftUI buttons — which is why the
-        // "OK" button appeared dead. Become a regular app for the dialog's lifetime.
-        let previousPolicy = NSApp.activationPolicy()
+        // A menu-bar (.accessory) app cannot own a key window, so switch to
+        // .regular while the dialog is up and switch back once it is gone.
+        previousPolicy = NSApp.activationPolicy()
         if previousPolicy != .regular {
             NSApp.setActivationPolicy(.regular)
         }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
-        // Activation is asynchronous; re-assert key status once the modal run loop
-        // is spinning, otherwise the panel can come up unfocused.
-        DispatchQueue.main.async {
-            NSApp.activate(ignoringOtherApps: true)
-            window.makeKeyAndOrderFront(nil)
-        }
-        NSApp.runModal(for: window)
-
-        if previousPolicy != .regular, !isSettingsWindowVisible() {
-            NSApp.setActivationPolicy(previousPolicy)
-        }
-        return primaryChosen
     }
 
-    private func isSettingsWindowVisible() -> Bool {
-        return NSApp.windows.contains { $0.isVisible && $0.level != .modalPanel && $0.styleMask.contains(.miniaturizable) }
+    private func otherAppWindowVisible() -> Bool {
+        NSApp.windows.contains { $0.isVisible && $0 !== window && $0.styleMask.contains(.titled) }
     }
 
     private func finish(primary: Bool) {
-        guard let panel else { return }
-        primaryChosen = primary
+        guard !finished else { return }
+        finished = true
+
         if let keyMonitor {
             NSEvent.removeMonitor(keyMonitor)
             self.keyMonitor = nil
         }
-        panel.delegate = nil
-        NSApp.stopModal()
-        panel.orderOut(nil)
-        self.panel = nil
+        if let window {
+            window.delegate = nil
+            window.close()
+            self.window = nil
+        }
+        if previousPolicy != .regular, !otherAppWindowVisible() {
+            NSApp.setActivationPolicy(previousPolicy)
+        }
+
+        let done = completion
+        completion = nil
+        done?(primary)
+        StyledDialog.live.remove(self)
     }
 
-    // Red close button behaves like the secondary / dismiss action.
+    // Red close button dismisses just like the secondary action.
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         finish(primary: false)
         return false
@@ -278,14 +288,8 @@ final class AboutPanelController {
     static let shared = AboutPanelController()
 
     func show(body: String) {
-        // Presented on the next main-queue turn: running a nested modal loop
-        // directly inside an NSMenu action / SwiftUI button handler leaves the
-        // previous tracking loop unwinding and the dialog ends up unable to
-        // receive mouse events.
-        DispatchQueue.main.async {
-            StyledDialog.run(title: L10n.t("about.title"),
+        StyledDialog.present(title: L10n.t("about.title"),
                              message: body,
                              primaryTitle: L10n.t("alert.ok"))
-        }
     }
 }
