@@ -1,47 +1,115 @@
 import SwiftUI
 
 // MARK: - Design tokens
+//
+// All metrics below are measured off the design mock (769×1149 px @2.083x,
+// i.e. a 369×552 pt window with a 30 pt title bar → 369×522 pt content area).
 
-/// Palette / metrics for the neumorphic light UI (matches the design spec).
 private enum Style {
-    static let windowWidth: CGFloat = 360
-    static let windowHeight: CGFloat = 624
+    static let windowWidth: CGFloat = 370
+    static let windowHeight: CGFloat = 522        // content area, title bar excluded
 
-    static let background = Color(red: 0.925, green: 0.925, blue: 0.929)
+    static let outerPadH: CGFloat = 16
+    static let cardPadH: CGFloat = 17
+    static let cardRadius: CGFloat = 18
+    static let cardGap: CGFloat = 18
+
+    static let background = Color(red: 0.929, green: 0.929, blue: 0.933)
     static let card = Color(red: 0.965, green: 0.965, blue: 0.969)
     static let control = Color.white
-    static let accent = Color(red: 0.086, green: 0.086, blue: 0.094)   // near-black
+    static let recess = Color(red: 0.914, green: 0.910, blue: 0.914)
+    static let accent = Color(red: 0.075, green: 0.075, blue: 0.082)
     static let primaryText = Color(red: 0.086, green: 0.086, blue: 0.094)
-    static let secondaryText = Color(red: 0.45, green: 0.45, blue: 0.47)
-    static let tick = Color(red: 0.78, green: 0.78, blue: 0.80)
-    static let titleBar = Color(red: 0.957, green: 0.957, blue: 0.961)
+    static let secondaryText = Color(red: 0.42, green: 0.42, blue: 0.45)
+    static let tick = Color(red: 0.792, green: 0.792, blue: 0.808)
 
-    static let cardRadius: CGFloat = 20
-    static let cardShadow = Color.black.opacity(0.06)
+    // Neumorphic shadow pair: soft dark below-right + white highlight above-left.
+    static let shadowDark = Color.black.opacity(0.085)
+    static let shadowLight = Color.white.opacity(0.95)
+
+    /// Glossy black used for the icon tile and checked checkboxes.
+    static let glossyBlack = LinearGradient(
+        colors: [Color(red: 0.19, green: 0.19, blue: 0.20), Color(red: 0.04, green: 0.04, blue: 0.05)],
+        startPoint: .topLeading, endPoint: .bottomTrailing
+    )
 }
 
-/// A white rounded card used as the section container.
+/// Applies the soft-UI double shadow used by every raised surface.
+private struct Raised: ViewModifier {
+    var radius: CGFloat
+    var darkBlur: CGFloat
+    var lightBlur: CGFloat
+    var offset: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .shadow(color: Style.shadowDark, radius: darkBlur, x: offset, y: offset)
+            .shadow(color: Style.shadowLight, radius: lightBlur, x: -offset, y: -offset)
+    }
+}
+
+private extension View {
+    func raised(radius: CGFloat, darkBlur: CGFloat = 6, lightBlur: CGFloat = 5, offset: CGFloat = 3) -> some View {
+        modifier(Raised(radius: radius, darkBlur: darkBlur, lightBlur: lightBlur, offset: offset))
+    }
+}
+
+/// Section container card.
 private struct Card<Content: View>: View {
+    var padV: CGFloat = 10
     @ViewBuilder var content: Content
 
     var body: some View {
         content
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+            .padding(.horizontal, Style.cardPadH)
+            .padding(.vertical, padV)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: Style.cardRadius, style: .continuous)
                     .fill(Style.card)
-                    .shadow(color: Style.cardShadow, radius: 8, x: 0, y: 3)
+                    .raised(radius: Style.cardRadius, darkBlur: 7, lightBlur: 6, offset: 3)
             )
+    }
+}
+
+private struct CardLabel: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.system(size: 12, weight: .bold))
+            .foregroundColor(Style.primaryText)
+    }
+}
+
+// MARK: - App icon (white plinth + glossy black tile)
+
+private struct AppIconTile: View {
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .fill(Style.control)
+                .frame(width: 46, height: 46)
+                .raised(radius: 15, darkBlur: 7, lightBlur: 6, offset: 3)
+
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(Style.glossyBlack)
+                .frame(width: 36, height: 36)
+                .shadow(color: Color.black.opacity(0.28), radius: 4, x: 0, y: 2)
+                .overlay(
+                    Image(systemName: "arrow.up.and.down")
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundColor(.white)
+                        .shadow(color: Color.black.opacity(0.35), radius: 1, x: 0, y: 1)
+                )
+        }
+        .frame(width: 46, height: 46)
     }
 }
 
 // MARK: - Speed gauge
 
-/// Circular progress ring showing the current scroll speed.
 private struct SpeedGauge: View {
-    let value: Double      // current sensitivity
+    let value: Double
     let range: ClosedRange<Double>
 
     private var progress: Double {
@@ -53,54 +121,53 @@ private struct SpeedGauge: View {
         ZStack {
             Circle()
                 .fill(Style.control)
-                .shadow(color: Style.cardShadow, radius: 6, x: 0, y: 3)
-
-            // Track + progress: 3/4 ring with the gap centred at the bottom.
-            Circle()
-                .trim(from: 0, to: 0.75)
-                .stroke(Style.tick.opacity(0.35), style: StrokeStyle(lineWidth: 5, lineCap: .round))
-                .rotationEffect(.degrees(135))
-                .padding(6)
+                .raised(radius: 25, darkBlur: 6, lightBlur: 5, offset: 2.5)
 
             Circle()
-                .trim(from: 0, to: 0.75 * progress)
-                .stroke(Style.accent, style: StrokeStyle(lineWidth: 5, lineCap: .round))
-                .rotationEffect(.degrees(135))
-                .padding(6)
+                .trim(from: 0, to: 0.78)
+                .stroke(Style.tick.opacity(0.55), style: StrokeStyle(lineWidth: 5.5, lineCap: .round))
+                .rotationEffect(.degrees(131))
+                .padding(4.5)
 
-            VStack(spacing: 0) {
+            Circle()
+                .trim(from: 0, to: 0.78 * progress)
+                .stroke(Style.accent, style: StrokeStyle(lineWidth: 5.5, lineCap: .round))
+                .rotationEffect(.degrees(131))
+                .padding(4.5)
+
+            VStack(spacing: -1) {
                 HStack(alignment: .firstTextBaseline, spacing: 0) {
                     Text(String(format: "%.1f", value))
-                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .font(.system(size: 14, weight: .bold))
                     Text("x")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .font(.system(size: 9.5, weight: .bold))
                 }
                 .foregroundColor(Style.primaryText)
 
                 Text(L10n.t("settings.scrollSpeed"))
-                    .font(.system(size: 7.5, weight: .medium))
+                    .font(.system(size: 6, weight: .semibold))
                     .foregroundColor(Style.secondaryText)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
             }
-            .padding(.horizontal, 11)
+            .padding(.horizontal, 8)
         }
-        .frame(width: 78, height: 78)
+        .frame(width: 50, height: 50)
     }
 }
 
-// MARK: - Ticked slider
+// MARK: - Ruler slider
 
-/// Custom slider: rounded recessed track with tick marks and a pill knob.
 private struct TickSlider: View {
     @Binding var value: Double
     let range: ClosedRange<Double>
     let step: Double
     let onChange: () -> Void
 
-    private let knobWidth: CGFloat = 14
-    private let knobHeight: CGFloat = 26
-    private let tickCount = 29
+    private let trackHeight: CGFloat = 24
+    private let knobWidth: CGFloat = 13
+    private let knobHeight: CGFloat = 22
+    private let tickCount = 38
 
     var body: some View {
         GeometryReader { geo in
@@ -109,41 +176,40 @@ private struct TickSlider: View {
                 / (range.upperBound - range.lowerBound)
 
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Style.background)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(Color.black.opacity(0.04), lineWidth: 1)
-                    )
+                RoundedRectangle(cornerRadius: trackHeight / 2, style: .continuous)
+                    .fill(Style.recess)
 
-                // Tick marks
-                HStack(spacing: 0) {
-                    ForEach(0..<tickCount, id: \.self) { index in
-                        Rectangle()
-                            .fill(Style.tick)
-                            .frame(width: 1, height: index % 4 == 0 ? 11 : 7)
-                            .frame(maxWidth: .infinity)
+                // Ruler: hairline baseline with short ticks rising from it.
+                VStack(spacing: 0) {
+                    HStack(alignment: .bottom, spacing: 0) {
+                        ForEach(0..<tickCount, id: \.self) { index in
+                            Rectangle()
+                                .fill(Style.tick.opacity(0.9))
+                                .frame(width: 1, height: index % 5 == 0 ? 6.5 : 4.5)
+                                .frame(maxWidth: .infinity)
+                        }
                     }
+                    Rectangle()
+                        .fill(Style.tick.opacity(0.85))
+                        .frame(height: 1)
                 }
-                .padding(.horizontal, 6)
+                .frame(height: 6.5)
+                .padding(.horizontal, 11)
 
-                // Knob
                 Capsule()
-                    .fill(Style.accent)
+                    .fill(Style.glossyBlack)
                     .frame(width: knobWidth, height: knobHeight)
-                    .shadow(color: Color.black.opacity(0.25), radius: 3, x: 0, y: 2)
+                    .shadow(color: Color.black.opacity(0.28), radius: 3, x: 0, y: 2)
                     .offset(x: usable * fraction)
             }
-            .frame(height: knobHeight)
+            .frame(height: trackHeight)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
-                    .onChanged { drag in
-                        update(x: drag.location.x - knobWidth / 2, usable: usable)
-                    }
+                    .onChanged { drag in update(x: drag.location.x - knobWidth / 2, usable: usable) }
             )
         }
-        .frame(height: 34)
+        .frame(height: trackHeight)
     }
 
     private func update(x: CGFloat, usable: CGFloat) {
@@ -160,7 +226,6 @@ private struct TickSlider: View {
 
 // MARK: - Checkbox row
 
-/// Black rounded-square checkbox with a white check mark.
 private struct CheckRow: View {
     let title: String
     @Binding var isOn: Bool
@@ -171,26 +236,25 @@ private struct CheckRow: View {
             isOn.toggle()
             onChange()
         } label: {
-            HStack(spacing: 14) {
+            HStack(spacing: 15) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(isOn ? Style.accent : Style.control)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(Color.black.opacity(isOn ? 0 : 0.06), lineWidth: 1)
-                        )
-                        .shadow(color: Style.cardShadow, radius: 3, x: 0, y: 2)
-
                     if isOn {
+                        RoundedRectangle(cornerRadius: 7.5, style: .continuous)
+                            .fill(Style.glossyBlack)
+                            .raised(radius: 7.5, darkBlur: 5, lightBlur: 4, offset: 2.5)
                         Image(systemName: "checkmark")
-                            .font(.system(size: 12, weight: .heavy))
+                            .font(.system(size: 10.5, weight: .heavy))
                             .foregroundColor(.white)
+                    } else {
+                        RoundedRectangle(cornerRadius: 7.5, style: .continuous)
+                            .fill(Style.control)
+                            .raised(radius: 7.5, darkBlur: 5, lightBlur: 4, offset: 2.5)
                     }
                 }
-                .frame(width: 28, height: 28)
+                .frame(width: 23, height: 23)
 
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 11.5, weight: .semibold))
                     .foregroundColor(Style.primaryText)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -212,26 +276,19 @@ private struct PillButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 10) {
-                if filledIcon {
-                    Image(systemName: systemImage)
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundColor(Style.accent)
-                } else {
-                    Image(systemName: systemImage)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(Style.primaryText)
-                }
+            HStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .font(.system(size: filledIcon ? 13 : 12, weight: .bold))
+                    .foregroundColor(Style.primaryText)
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(Style.primaryText)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 13)
+            .frame(width: 95, height: 32)
             .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
                     .fill(Style.card)
-                    .shadow(color: Style.cardShadow, radius: 6, x: 0, y: 3)
+                    .raised(radius: 15, darkBlur: 6, lightBlur: 5, offset: 3)
             )
             .contentShape(Rectangle())
         }
@@ -318,68 +375,61 @@ struct ContentView: View {
     }
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 0) {
             header
+            Spacer().frame(height: 21)
             speedCard
+            Spacer().frame(height: Style.cardGap)
             activationCard
+            Spacer().frame(height: Style.cardGap)
             togglesCard
             Spacer(minLength: 0)
             bottomBar
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 20)
-        .padding(.bottom, 16)
+        .padding(.horizontal, Style.outerPadH)
+        .padding(.top, 17)
+        .padding(.bottom, 33)
         .frame(width: Style.windowWidth, height: Style.windowHeight)
         .background(Style.background)
     }
 
-    // App icon + title, with the speed gauge pinned to the trailing edge.
+    // Centred icon + title, with the speed gauge pinned to the trailing edge.
     private var header: some View {
         ZStack(alignment: .top) {
-            VStack(spacing: 12) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Style.accent)
-                        .frame(width: 62, height: 62)
-                        .shadow(color: Color.black.opacity(0.22), radius: 8, x: 0, y: 4)
-                    Image(systemName: "arrow.up.and.down")
-                        .font(.system(size: 26, weight: .bold))
-                        .foregroundColor(.white)
-                }
-
+            VStack(spacing: 7) {
+                AppIconTile()
                 Text(L10n.t("settings.appName"))
-                    .font(.system(size: 24, weight: .heavy))
+                    .font(.system(size: 18, weight: .heavy))
                     .foregroundColor(Style.primaryText)
             }
+            .padding(.top, 4)
 
             HStack {
                 Spacer()
                 SpeedGauge(value: sensitivity, range: speedRange)
+                    .padding(.trailing, 8)
             }
-            .padding(.top, 4)
         }
     }
 
     private var speedCard: some View {
-        Card {
-            VStack(alignment: .leading, spacing: 10) {
-                Text(L10n.t("settings.scrollSpeed"))
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundColor(Style.primaryText)
+        Card(padV: 11) {
+            VStack(alignment: .leading, spacing: 9) {
+                CardLabel(text: L10n.t("settings.scrollSpeed"))
 
-                HStack(spacing: 12) {
+                HStack(spacing: 6) {
                     TickSlider(value: $sensitivity, range: speedRange, step: 0.1) {
                         NotificationCenter.default.post(name: NSNotification.Name("ScrollappSensitivityChanged"), object: nil)
                     }
 
                     Text(String(format: "%.1fx", sensitivity))
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .font(.system(size: 12, weight: .semibold))
                         .monospacedDigit()
                         .foregroundColor(Style.primaryText)
-                        .frame(width: 54, height: 34)
+                        .frame(width: 40, height: 24)
                         .background(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(Style.background)
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .fill(Style.recess)
                         )
                 }
             }
@@ -387,34 +437,33 @@ struct ContentView: View {
     }
 
     private var activationCard: some View {
-        Card {
-            VStack(alignment: .leading, spacing: 10) {
-                Text(L10n.t("settings.activationMethod"))
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundColor(Style.primaryText)
+        Card(padV: 8) {
+            VStack(alignment: .leading, spacing: 9) {
+                CardLabel(text: L10n.t("settings.activationMethod"))
 
                 ZStack {
-                    HStack {
+                    HStack(spacing: 0) {
                         Text(currentActivationLabel)
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.system(size: 12.5, weight: .semibold))
                             .foregroundColor(Style.primaryText)
-                        Spacer()
-                        ZStack {
-                            Circle()
-                                .fill(Style.accent)
-                                .frame(width: 30, height: 30)
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundColor(.white)
-                        }
+                        Spacer(minLength: 4)
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Style.glossyBlack)
+                            .frame(width: 24, height: 24)
+                            .shadow(color: Color.black.opacity(0.25), radius: 3, x: 0, y: 2)
+                            .overlay(
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(.white)
+                            )
                     }
-                    .padding(.leading, 14)
-                    .padding(.trailing, 6)
-                    .padding(.vertical, 6)
+                    .padding(.leading, 13)
+                    .padding(.trailing, 4)
+                    .frame(height: 30)
                     .background(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        RoundedRectangle(cornerRadius: 15, style: .continuous)
                             .fill(Style.control)
-                            .shadow(color: Style.cardShadow, radius: 4, x: 0, y: 2)
+                            .raised(radius: 16, darkBlur: 5, lightBlur: 4, offset: 2.5)
                     )
 
                     // Transparent AppKit overlay: SwiftUI's Menu styles discard the
@@ -426,14 +475,15 @@ struct ContentView: View {
                         activationMethod = raw
                         NotificationCenter.default.post(name: NSNotification.Name("ScrollappActivationChanged"), object: nil)
                     }
+                    .frame(height: 30)
                 }
             }
         }
     }
 
     private var togglesCard: some View {
-        Card {
-            VStack(alignment: .leading, spacing: 14) {
+        Card(padV: 10) {
+            VStack(alignment: .leading, spacing: 10) {
                 CheckRow(title: L10n.t("settings.invertDirection"), isOn: $invertScroll) {
                     NotificationCenter.default.post(name: NSNotification.Name("ScrollappInvertChanged"), object: nil)
                 }
@@ -451,7 +501,7 @@ struct ContentView: View {
     }
 
     private var bottomBar: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 0) {
             PillButton(title: L10n.t("settings.about"), systemImage: "info.circle.fill", filledIcon: true) {
                 let alert = NSAlert()
                 alert.messageText = L10n.t("about.title")
@@ -460,9 +510,11 @@ struct ContentView: View {
                 alert.addButton(withTitle: L10n.t("alert.ok"))
                 alert.runModal()
             }
+            Spacer(minLength: 0)
             PillButton(title: L10n.t("settings.quit"), systemImage: "rectangle.portrait.and.arrow.right", filledIcon: false) {
                 NSApplication.shared.terminate(nil)
             }
         }
+        .padding(.horizontal, 3)
     }
 }

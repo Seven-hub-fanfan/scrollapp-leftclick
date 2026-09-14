@@ -569,7 +569,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let window = NSWindow(contentViewController: hostingController)
             window.title = L10n.t("settings.windowTitle")
             window.styleMask = [.titled, .closable, .miniaturizable]
-            window.setContentSize(NSSize(width: 360, height: 624))
+            window.setContentSize(NSSize(width: 370, height: 522))
             // The redesigned UI uses a fixed light palette, so pin the appearance
             // and blend the title bar into the window background.
             window.appearance = NSAppearance(named: .aqua)
