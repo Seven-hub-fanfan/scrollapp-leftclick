@@ -43,6 +43,11 @@ Scrollapp 安装说明
 勾选“红色点击热点”可标记真实点击位置，热点大小可独立调整为 3–16 pt。
 退出 Scrollapp 时恢复原始系统光标。
 
+如果旧版留下光标恢复错误：
+打开“光标皮肤”点击“重试”，或点击“使用系统光标”恢复正常指针。
+原始恢复备份会保留，不需要手动删除。
+如仍有异常，点击“导出诊断”，将 JSON 报告反馈给维护者。
+
 本安装包使用本地 ad-hoc 签名，未经过 Apple 公证。
 INSTALL
 codesign --verify --deep --strict "$STAGING/payload/Scrollapp.app"

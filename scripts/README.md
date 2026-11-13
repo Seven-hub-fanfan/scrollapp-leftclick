@@ -49,6 +49,23 @@ python3 scripts/verify_cursor_service.py --global \
 
 The checks temporarily replace cursors and verify complete recovery.
 
+### `verify_cursor_recovery.py`
+
+Runs fault injection against genuine recovery journals: native core cache
+drift, invalid original descriptors, named cursor readback mismatch and an
+unreadable journal. Checks that the service remains alive, blocks new writes,
+retains backups, supports retry and archives before explicitly returning to
+native cursors. It restores the original baseline after the test.
+
+```bash
+python3 scripts/verify_cursor_recovery.py --global \
+  build/Scrollapp.app/Contents/MacOS/CursorService /path/to/payloads
+```
+
+Quit all running Scrollapp instances first. The directory must contain
+`frog.plist`; use an external test directory so fixtures and backup images
+do not enter the repository.
+
 ### `verify_cursor_raster.swift`
 
 Checks fixed master selection across previous resolution thresholds, explicit
@@ -62,7 +79,8 @@ Objective-C object built from `CursorRaster.m`, and pass
 `Test.app/Contents/MacOS` and copy current `Skins` resources to
 `Test.app/Contents/Resources/Skins` so `Bundle.main` resolves them. Run the
 executable with the output directory as its sole argument. It makes no global
-cursor changes. Quit any active Scrollapp before exporting genuine system
+cursor changes. Pass a `system-cursors.plist` exported by the current helper
+in the output directory to verify native previews. Quit any active Scrollapp before exporting genuine system
 images or running the separate global service checks.
 
 ## Quick Start

@@ -25,9 +25,25 @@ static NSDictionary *journal;
 static NSDictionary *activePlan;
 static NSDictionary *lastRestoration;
 static NSDictionary *installFailure;
+static BOOL recoveryRequired;
+static NSString *backupError;
+static NSString *stage = @"startup";
+
+static BOOL save(id value, NSString *path);
+static NSDictionary *load(NSString *path);
 
 static void emit(NSDictionary *value) {
-    NSData *data = [NSJSONSerialization dataWithJSONObject:value options:NSJSONWritingSortedKeys error:nil];
+    NSMutableDictionary *response = value.mutableCopy;
+    response[@"recoveryRequired"] = @(recoveryRequired);
+    if (journalPath && (value[@"error"] || [value[@"warnings"] count])) {
+        NSString *path = [journalPath stringByAppendingString:@".diagnostics"];
+        NSMutableArray *events = [load(path)[@"events"] mutableCopy] ?: [NSMutableArray array];
+        [events addObject:@{@"time":@([[NSDate date] timeIntervalSince1970]),
+            @"stage":stage, @"response":response}];
+        while (events.count > 12) [events removeObjectAtIndex:0];
+        save(@{@"events":events}, path);
+    }
+    NSData *data = [NSJSONSerialization dataWithJSONObject:response options:NSJSONWritingSortedKeys error:nil];
     puts([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding].UTF8String);
     fflush(stdout);
 }
@@ -78,6 +94,8 @@ static NSString *pixelHash(CGImageRef image) {
     return result;
 }
 static NSArray *imagesFor(NSDictionary *descriptor) {
+    if (![descriptor isKindOfClass:NSDictionary.class] ||
+        ![descriptor[@"Representations"] isKindOfClass:NSArray.class]) return nil;
     NSMutableArray *result = [NSMutableArray array];
     for (NSData *data in descriptor[@"Representations"]) {
         CGImageRef image = decode(data);
@@ -123,6 +141,7 @@ static NSDictionary *metadata(NSDictionary *descriptor) {
 static BOOL matches(NSDictionary *expected, NSDictionary *actual) {
     if (!expected || !actual) return NO;
     NSArray *images = imagesFor(expected);
+    if (!images.count) return NO;
     NSDictionary *normalized = describe(
         CGSizeMake([expected[@"PointsWide"] doubleValue], [expected[@"PointsHigh"] doubleValue]),
         CGPointMake([expected[@"HotSpotX"] doubleValue], [expected[@"HotSpotY"] doubleValue]),
@@ -139,6 +158,93 @@ static CGError install(NSString *name, NSDictionary *descriptor, BOOL global) {
         CGPointMake([descriptor[@"HotSpotX"] doubleValue], [descriptor[@"HotSpotY"] doubleValue]),
         [descriptor[@"FrameCount"] unsignedIntegerValue], [descriptor[@"FrameDuration"] doubleValue],
         (__bridge CFArrayRef)images, &seed);
+}
+static BOOL supportedName(id name) {
+    if (![name isKindOfClass:NSString.class]) return NO;
+    if ([@[@"Arrow", @"ArrowCtx", @"ArrowS", @"IBeam", @"IBeamS", @"IBeamXOR",
+           @"Alias", @"Copy", @"Move"] containsObject:
+         [name stringByReplacingOccurrencesOfString:@"com.apple.coregraphics." withString:@""]] &&
+        [name hasPrefix:@"com.apple.coregraphics."]) return YES;
+    if (![name hasPrefix:@"com.apple.cursor."]) return NO;
+    NSString *suffix = [name substringFromIndex:[@"com.apple.cursor." length]];
+    int index = suffix.intValue;
+    return [suffix isEqual:@(index).stringValue] && index >= 2 && index <= 43 &&
+        index != 4 && index != 6 && index != 25 && index != 39;
+}
+static NSArray *knownNames(void) {
+    NSMutableArray *names = [NSMutableArray array];
+    for (NSString *suffix in @[@"Arrow", @"ArrowCtx", @"ArrowS", @"IBeam", @"IBeamS",
+                               @"IBeamXOR", @"Alias", @"Copy", @"Move"])
+        [names addObject:[@"com.apple.coregraphics." stringByAppendingString:suffix]];
+    for (int i = 2; i <= 43; i++) {
+        NSString *name = [NSString stringWithFormat:@"com.apple.cursor.%d", i];
+        if (supportedName(name)) [names addObject:name];
+    }
+    return names;
+}
+// Backups include native animations; they are not restricted to static theme
+// metadata. Check their structure before attempting any writes during recovery.
+static BOOL validBackup(NSDictionary *value) {
+    if (![value[@"Version"] isEqual:@1] ||
+        ![value[@"Names"] isKindOfClass:NSDictionary.class] || [value[@"Names"] count] > 128 ||
+        ![value[@"CoreImages"] isKindOfClass:NSDictionary.class]) return NO;
+    for (id name in value[@"Names"]) {
+        NSDictionary *entry = value[@"Names"][name];
+        if (!supportedName(name) || ![entry isKindOfClass:NSDictionary.class] ||
+            ![entry[@"Registered"] isKindOfClass:NSNumber.class]) return NO;
+        if (![entry[@"Registered"] boolValue]) continue;
+        NSDictionary *d = entry[@"Original"];
+        if (![d isKindOfClass:NSDictionary.class]) return NO;
+        for (NSString *key in @[@"PointsWide", @"PointsHigh", @"HotSpotX", @"HotSpotY", @"FrameCount", @"FrameDuration"])
+            if (![d[key] isKindOfClass:NSNumber.class] || !isfinite([d[key] doubleValue])) return NO;
+        if ([d[@"PointsWide"] doubleValue] <= 0 || [d[@"PointsHigh"] doubleValue] <= 0 ||
+            [d[@"PointsWide"] doubleValue] > 512 || [d[@"PointsHigh"] doubleValue] > 512 ||
+            [d[@"FrameCount"] integerValue] < 1 || [d[@"FrameCount"] integerValue] > 256) return NO;
+        NSArray *pngs = d[@"Representations"];
+        if (![pngs isKindOfClass:NSArray.class] || !pngs.count || pngs.count > 8) return NO;
+        for (id png in pngs)
+            if (![png isKindOfClass:NSData.class] || [png length] > 16777216) return NO;
+        if (!imagesFor(d).count) return NO;
+    }
+    for (id index in value[@"CoreImages"]) {
+        if (![index isKindOfClass:NSString.class] ||
+            ![index isEqual:@([index intValue]).stringValue] || [index intValue] < 0 || [index intValue] >= 128 ||
+            ![value[@"CoreImages"][index] isKindOfClass:NSDictionary.class]) return NO;
+    }
+    return YES;
+}
+static NSString *archiveBackup(void) {
+    NSString *directory = [[journalPath stringByDeletingLastPathComponent]
+        stringByAppendingPathComponent:@"recovery-archives"];
+    NSFileManager *fm = NSFileManager.defaultManager;
+    if (![fm createDirectoryAtPath:directory withIntermediateDirectories:YES
+        attributes:@{NSFilePosixPermissions:@0700} error:nil]) return nil;
+    NSString *path = [directory stringByAppendingPathComponent:
+        [NSUUID.UUID.UUIDString stringByAppendingPathExtension:@"plist"]];
+    return [fm copyItemAtPath:journalPath toPath:path error:nil] ? path.lastPathComponent : nil;
+}
+static BOOL clearBackup(void) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    if ([fm fileExistsAtPath:journalPath] && ![fm removeItemAtPath:journalPath error:nil]) return NO;
+    journal = nil; activePlan = nil; backupError = nil; recoveryRequired = NO;
+    return YES;
+}
+static void exportSystemImages(void) {
+    if (recoveryRequired || journal) return;
+    NSDictionary *sources = @{@"arrow":@[@"com.apple.coregraphics.Arrow", @7],
+        @"text":@[@"com.apple.coregraphics.IBeam", @26], @"link":@[@"", @13],
+        @"grab":@[@"", @11], @"crosshair":@[@"", @20], @"horizontal":@[@"", @27],
+        @"vertical":@[@"", @22], @"diagonalRight":@[@"", @29], @"diagonalLeft":@[@"", @33],
+        @"unavailable":@[@"", @3], @"help":@[@"", @13], @"zoomIn":@[@"", @42], @"zoomOut":@[@"", @43]};
+    NSMutableDictionary *roles = [NSMutableDictionary dictionary];
+    for (NSString *role in sources) {
+        NSArray *source = sources[role];
+        NSDictionary *d = [source[0] length] ? readNamed(source[0]) : nil;
+        d = d ?: readCore([source[1] intValue]);
+        if (d) roles[role] = d;
+    }
+    save(@{@"Roles":roles}, [[journalPath stringByDeletingLastPathComponent]
+        stringByAppendingPathComponent:@"system-cursors.plist"]);
 }
 // Bound the full payload and decoded image dimensions before any system writes.
 // v1 permits static images only. Wait and Empty retain their system semantics.
@@ -211,33 +317,83 @@ static BOOL preflight(NSDictionary *names) {
     return YES;
 }
 static NSDictionary *restore(void) {
-    if (!journal) return @{@"ok":@YES, @"restored":@0};
-    NSMutableArray *failures = [NSMutableArray array];
+    if (backupError) { recoveryRequired = YES; return @{@"ok":@NO, @"error":backupError}; }
+    if (!journal) { recoveryRequired = NO; return @{@"ok":@YES, @"restored":@0}; }
+    NSMutableArray *failures = [NSMutableArray array], *warnings = [NSMutableArray array];
     NSDictionary *names = journal[@"Names"];
     for (NSString *name in names) {
         NSDictionary *entry = names[name];
         CGError error = [entry[@"Registered"] boolValue] ? install(name, entry[@"Original"], YES) :
             removeNamed(cid, (char *)name.UTF8String, false);
         // Removing an already absent registration is harmless; verify below.
-        if (error && [entry[@"Registered"] boolValue]) [failures addObject:name];
+        if (error && [entry[@"Registered"] boolValue])
+            [failures addObject:@{@"name":name, @"stage":@"installOriginal", @"code":@(error)}];
     }
-    if (unregisterCore(cid)) [failures addObject:@"coreCache"];
+    CGError cacheError = unregisterCore(cid);
+    if (cacheError) [failures addObject:@{@"name":@"coreCache", @"stage":@"clearCache", @"code":@(cacheError)}];
     for (NSString *index in journal[@"CoreImages"]) {
-        if (!matches(journal[@"CoreImages"][index], readCore(index.intValue))) [failures addObject:[@"core." stringByAppendingString:index]];
+        if (!matches(journal[@"CoreImages"][index], readCore(index.intValue)))
+            [warnings addObject:[@"core." stringByAppendingString:index]];
     }
     for (NSString *name in names) {
         size_t bytes = 0;
         BOOL registered = !namedSize(cid, (char *)name.UTF8String, &bytes) && bytes > 0;
         NSDictionary *entry = names[name];
         if (registered != [entry[@"Registered"] boolValue] ||
-            (registered && !matches(entry[@"Original"], readNamed(name)))) [failures addObject:name];
+            (registered && !matches(entry[@"Original"], readNamed(name))))
+            [failures addObject:@{@"name":name, @"stage":@"verifyOriginal",
+                @"expectedRegistered":entry[@"Registered"], @"actualRegistered":@(registered)}];
     }
-    if (failures.count) return @{@"ok":@NO, @"error":@"restoreFailed", @"details":failures};
+    if (failures.count) {
+        recoveryRequired = YES;
+        return @{@"ok":@NO, @"error":@"restoreFailed", @"details":failures, @"warnings":warnings};
+    }
     NSUInteger count = names.count;
     NSUInteger coreCount = [journal[@"CoreImages"] count];
-    [[NSFileManager defaultManager] removeItemAtPath:journalPath error:nil];
-    journal = nil; activePlan = nil;
-    lastRestoration = @{@"ok":@YES, @"restored":@(count), @"coreVerified":@(coreCount)};
+    // Named registrations are the owned state; regenerated native core caches
+    // can differ after display/accessibility changes. Retain that baseline in an
+    // archive before releasing the journal, rather than locking out the service.
+    NSString *archive = warnings.count ? archiveBackup() : nil;
+    if ((warnings.count && !archive) || !clearBackup()) {
+        recoveryRequired = YES;
+        return @{@"ok":@NO, @"error":@"backupFailed"};
+    }
+    lastRestoration = @{@"ok":@YES, @"restored":@(count),
+        @"coreVerified":@(coreCount - warnings.count), @"warnings":warnings, @"archive":archive ?: @""};
+    exportSystemImages();
+    return lastRestoration;
+}
+static NSDictionary *nativeReset(void) {
+    // This explicit fallback discards registrations, never the user's only
+    // backup. Invalid journals are copied byte-for-byte before system writes.
+    NSString *archive = nil;
+    if ([NSFileManager.defaultManager fileExistsAtPath:journalPath]) {
+        archive = archiveBackup();
+        if (!archive) return @{@"ok":@NO, @"error":@"backupFailed"};
+    }
+    NSMutableArray *failures = [NSMutableArray array];
+    // The last parameter selects global removal for legacy cursor entries.
+    // Built-in CoreGraphics names regenerate their native fallback immediately
+    // (and may report kCGErrorFailure while doing so); they remain readable.
+    for (NSString *name in knownNames()) removeNamed(cid, (char *)name.UTF8String, true);
+    CGError error = unregisterCore(cid);
+    if (error) [failures addObject:@{@"name":@"coreCache", @"code":@(error)}];
+    for (NSString *name in knownNames()) {
+        size_t bytes = 0;
+        BOOL registered = !namedSize(cid, (char *)name.UTF8String, &bytes) && bytes > 0;
+        if ([name hasPrefix:@"com.apple.coregraphics."]) {
+            NSDictionary *native = registered ? readNamed(name) : nil;
+            if (!native || (activePlan[name] && matches(activePlan[name], native)))
+                [failures addObject:@{@"name":name, @"stage":@"verifyNativeFallback"}];
+        } else if (registered)
+            [failures addObject:@{@"name":name, @"stage":@"verifyRemoved"}];
+    }
+    if (failures.count || !clearBackup()) {
+        recoveryRequired = YES;
+        return @{@"ok":@NO, @"error":@"restoreFailed", @"details":failures, @"archive":archive ?: @""};
+    }
+    exportSystemImages();
+    lastRestoration = @{@"ok":@YES, @"nativeReset":@YES, @"archive":archive ?: @""};
     return lastRestoration;
 }
 static NSDictionary *ensureBackup(NSDictionary *plan) {
@@ -378,13 +534,21 @@ int main(int argc, const char *argv[]) {
         // any new theme. Never discard an unsuccessful recovery.
         if ([[NSFileManager defaultManager] fileExistsAtPath:journalPath]) {
             journal = load(journalPath);
-            if (![journal[@"Version"] isEqual:@1] || ![journal[@"Names"] isKindOfClass:NSDictionary.class]) {
-                emit(@{@"ok":@NO, @"error":@"invalidBackup"}); return 5;
-            }
+            if (!validBackup(journal)) backupError = @"invalidBackup";
             NSDictionary *result = restore();
-            if (![result[@"ok"] boolValue]) { emit(result); return 5; }
+            if (![result[@"ok"] boolValue]) {
+                NSMutableDictionary *paused = result.mutableCopy;
+                paused[@"ready"] = @NO; paused[@"pid"] = @(getpid());
+                emit(paused);
+            } else {
+                NSMutableDictionary *ready = result.mutableCopy;
+                ready[@"ready"] = @YES; ready[@"pid"] = @(getpid());
+                emit(ready);
+            }
+        } else {
+            exportSystemImages();
+            emit(@{@"ok":@YES, @"ready":@YES, @"pid":@(getpid())});
         }
-        emit(@{@"ok":@YES, @"ready":@YES, @"pid":@(getpid())});
         NSMutableData *buffer = [NSMutableData data];
         BOOL finished = NO;
         while (!finished) {
@@ -405,7 +569,10 @@ int main(int argc, const char *argv[]) {
                     id command = [NSJSONSerialization JSONObjectWithData:line options:0 error:nil];
                     if (![command isKindOfClass:NSDictionary.class]) { emit(@{@"ok":@NO, @"error":@"invalidCommand"}); continue; }
                     NSString *action = command[@"action"];
-                    if ([action isEqual:@"apply"]) {
+                    stage = [action isKindOfClass:NSString.class] ? action : @"invalidCommand";
+                    if (recoveryRequired && ([action isEqual:@"apply"] || [action isEqual:@"system"])) {
+                        emit(@{@"ok":@NO, @"error":backupError ?: @"restoreFailed"});
+                    } else if ([action isEqual:@"apply"]) {
                         NSString *path = command[@"path"];
                         NSDictionary *payload = [path isKindOfClass:NSString.class] ? load(path) : nil;
                         double scale = command[@"scale"] ? [command[@"scale"] doubleValue] : 1;
@@ -417,6 +584,15 @@ int main(int argc, const char *argv[]) {
                     } else if ([action isEqual:@"reset"] || [action isEqual:@"quit"]) {
                         NSDictionary *result = restore(); emit(result);
                         finished = [action isEqual:@"quit"];
+                    } else if ([action isEqual:@"nativeReset"]) {
+                        emit(nativeReset());
+                    } else if ([action isEqual:@"diagnostics"]) {
+                        emit(@{@"ok":@YES, @"os":NSProcessInfo.processInfo.operatingSystemVersionString,
+                            @"pid":@(getpid()), @"backupError":backupError ?: @"",
+                            @"hasBackup":@([NSFileManager.defaultManager fileExistsAtPath:journalPath]),
+                            @"namedBackupCount":@([journal[@"Names"] count]),
+                            @"history":load([journalPath stringByAppendingString:@".diagnostics"]) ?: @{},
+                            @"lastRestoration":lastRestoration ?: @{}});
                     } else if ([action isEqual:@"verify"]) {
                         BOOL ok = activePlan != nil;
                         for (NSString *name in activePlan) if (!matches(activePlan[name], readNamed(name))) ok = NO;
@@ -442,6 +618,7 @@ int main(int argc, const char *argv[]) {
                 if (finished) break;
             }
         }
+        stage = @"shutdown";
         NSDictionary *final = restore();
         // Persist the recovery outcome for diagnostics without retaining images.
         save([final[@"ok"] boolValue] && !journal && lastRestoration ? lastRestoration : final,

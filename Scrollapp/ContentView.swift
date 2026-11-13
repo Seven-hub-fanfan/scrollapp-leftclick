@@ -543,6 +543,7 @@ struct ContentView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            .disabled(skins.needsRecovery)
         }
     }
 

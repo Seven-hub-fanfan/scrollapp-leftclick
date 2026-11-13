@@ -71,15 +71,47 @@ enum CursorCatalog {
     private static var systemDescriptors: [CursorRole: [String: Any]] = [:]
     private static var cursorCache: [String: NSCursor] = [:]
     private static var cursorCacheOrder: [String] = []
-    static func captureSystemImages() {
-        guard systemImages.isEmpty else { return }
+    static func captureSystemImages(from url: URL) {
+        // The helper exports this only after recovering its journal. AppKit's
+        // own NSCursor singletons may still hold images from the previous skin.
+        systemImages.removeAll(); systemHotSpots.removeAll(); systemDescriptors.removeAll()
+        thumbnails.removeAll(); cursorCache.removeAll(); cursorCacheOrder.removeAll()
+        let data = try? Data(contentsOf: url)
+        let root = data.flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) } as? [String: Any]
+        let roles = root?["Roles"] as? [String: [String: Any]] ?? [:]
         for role in CursorRole.allCases {
+            if var d = roles[role.rawValue], let pngs = d["Representations"] as? [Data],
+               let w = d["PointsWide"] as? Double, let h = d["PointsHigh"] as? Double,
+               let x = d["HotSpotX"] as? Double, let y = d["HotSpotY"] as? Double {
+                let frames = max(1, (d["FrameCount"] as? Int) ?? 1)
+                let firstFrames = pngs.compactMap { png -> Data? in
+                    guard let rep = NSBitmapImageRep(data: png), let image = rep.cgImage,
+                          let first = image.cropping(to: CGRect(x: 0, y: 0, width: image.width,
+                            height: image.height / frames)) else { return nil }
+                    return NSBitmapImageRep(cgImage: first).representation(using: .png, properties: [:])
+                }
+                if !firstFrames.isEmpty {
+                    d["Representations"] = firstFrames; d["FrameCount"] = 1; d["FrameDuration"] = 0
+                    let image = NSImage(size: NSSize(width: w, height: h))
+                    for png in firstFrames {
+                        if let rep = NSBitmapImageRep(data: png) {
+                            rep.size = image.size; image.addRepresentation(rep)
+                        }
+                    }
+                    systemDescriptors[role] = d
+                    systemImages[role] = image; systemHotSpots[role] = NSPoint(x: x, y: y)
+                    continue
+                }
+            }
             let cursor = systemCursor(role)
             systemImages[role] = cursor.image.copy() as? NSImage
             systemHotSpots[role] = cursor.hotSpot
         }
     }
     static func systemCursor(_ role: CursorRole) -> NSCursor {
+        if let image = systemImages[role], let spot = systemHotSpots[role] {
+            return NSCursor(image: image, hotSpot: spot)
+        }
         switch role {
         case .text: return .iBeam
         case .link, .help: return .pointingHand

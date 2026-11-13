@@ -54,8 +54,8 @@ struct VerifyCursorRaster {
     }
     static func main() throws {
         _ = NSApplication.shared
-        CursorCatalog.captureSystemImages()
         let directory = URL(fileURLWithPath: CommandLine.arguments[1])
+        CursorCatalog.captureSystemImages(from: directory.appendingPathComponent("system-cursors.plist"))
         var results: [[String: Any]] = []
         // Deliberately different low-resolution artwork exposes source switching.
         let fixture: [String: Any] = ["PointsWide": 32, "PointsHigh": 32,

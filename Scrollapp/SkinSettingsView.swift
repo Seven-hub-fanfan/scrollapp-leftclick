@@ -128,18 +128,22 @@ private struct SkinLibraryView: View {
             Button { store.selectedID = theme.id } label: {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: 21) {
-                        ForEach([CursorRole.arrow, .text, .link], id: \.self) { role in
-                            Image(nsImage: CursorCatalog.thumbnail(theme, role: role))
-                                .interpolation(theme.id == "mint" ? .none : .high)
-                                .resizable().scaledToFit().frame(width: 32, height: 32)
-                                .shadow(color: .black.opacity(0.11), radius: 2, y: 2)
+                        if theme.id == "system" && store.needsRecovery {
+                            Image(systemName: "cursorarrow").font(.system(size: 25))
+                        } else {
+                            ForEach([CursorRole.arrow, .text, .link], id: \.self) { role in
+                                Image(nsImage: CursorCatalog.thumbnail(theme, role: role))
+                                    .interpolation(theme.id == "mint" ? .none : .high)
+                                    .resizable().scaledToFit().frame(width: 32, height: 32)
+                                    .shadow(color: .black.opacity(0.11), radius: 2, y: 2)
+                            }
                         }
                     }
                     .frame(maxWidth: .infinity).frame(height: 61)
                     .background(theme.color.opacity(0.65), in: RoundedRectangle(cornerRadius: 10))
                     HStack(spacing: 6) {
                         Text(theme.name).font(.system(size: 12, weight: .bold))
-                        if store.activeID == theme.id {
+                        if store.activeID == theme.id && !store.needsRecovery {
                             Image(systemName: "checkmark.circle.fill").font(.system(size: 10)).foregroundStyle(Color(red: 0.27, green: 0.49, blue: 0.35))
                         }
                         Spacer()
@@ -185,8 +189,12 @@ private struct SkinLibraryView: View {
             HStack(spacing: 5) {
                 ForEach([CursorRole.arrow, .text, .link, .grab, .crosshair, .horizontal, .unavailable], id: \.self) { role in
                     VStack(spacing: 5) {
-                        CursorHoverPreview(theme: store.selectedTheme, role: role)
-                            .frame(height: 38)
+                        if store.needsRecovery && store.selectedID == "system" {
+                            Image(systemName: "cursorarrow").frame(height: 38)
+                        } else {
+                            CursorHoverPreview(theme: store.selectedTheme, role: role)
+                                .frame(height: 38)
+                        }
                         Text(role.label).font(.system(size: 8)).foregroundStyle(Style.secondaryText).lineLimit(1)
                     }
                     .frame(maxWidth: .infinity)
@@ -200,12 +208,18 @@ private struct SkinLibraryView: View {
     private var footer: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 10) {
+                if !store.needsRecovery && store.errorKey == nil {
+                    Button(L10n.t("skins.exportDiagnostics")) { store.exportDiagnostics() }
+                        .buttonStyle(.plain).font(.system(size: 9))
+                        .foregroundStyle(Style.secondaryText)
+                        .accessibilityIdentifier("skin.diagnostics")
+                }
                 Spacer(minLength: 0)
                 Button(L10n.t("skins.reset")) { store.reset() }
                     .buttonStyle(.plain).font(.system(size: 10, weight: .medium))
-                    .disabled(store.isBusy || !store.isReady || !store.isThemed)
+                    .disabled(store.isBusy || !store.isReady || !store.hasCustomCursor)
                 Button {
-                    if store.isReady { store.apply(store.selectedID) } else { store.start() }
+                    if store.isReady { store.apply(store.selectedID) } else { store.retry() }
                 } label: {
                     HStack(spacing: 6) {
                         if store.isBusy { ProgressView().controlSize(.mini).tint(.white) }
@@ -223,6 +237,24 @@ private struct SkinLibraryView: View {
             if let error = store.errorKey {
                 Text(L10n.t("skins.error.\(error)")).font(.system(size: 9)).foregroundStyle(Color(red: 0.68, green: 0.26, blue: 0.22))
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if store.needsRecovery {
+                HStack {
+                    Button(L10n.t("skins.nativeReset")) { store.useSystemCursor() }
+                        .accessibilityIdentifier("skin.nativeReset")
+                    Spacer()
+                    Button(L10n.t("skins.exportDiagnostics")) { store.exportDiagnostics() }
+                        .accessibilityIdentifier("skin.diagnostics")
+                }
+                .font(.system(size: 10, weight: .semibold)).buttonStyle(.plain)
+                .disabled(store.isBusy)
+            } else if store.errorKey != nil {
+                Button(L10n.t("skins.exportDiagnostics")) { store.exportDiagnostics() }
+                    .font(.system(size: 10)).buttonStyle(.plain)
+                    .accessibilityIdentifier("skin.diagnostics")
+            }
+            if store.diagnosticError {
+                Text(L10n.t("skins.diagnosticFailed")).font(.system(size: 9)).foregroundStyle(.red)
             }
         }
     }
