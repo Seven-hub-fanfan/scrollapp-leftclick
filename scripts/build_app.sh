@@ -10,10 +10,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SDK_PATH="$(xcrun --show-sdk-path)"
-APP_DIR="build/Scrollapp.app"
+APP_DIR="${SCROLLAPP_OUTPUT_DIR:-build/Scrollapp.app}"
+BUNDLE_ID="${SCROLLAPP_BUNDLE_ID:-com.scrollapp.app}"
 SRC="Scrollapp"
-VERSION="2.2.3"
-BUILD="19"
+VERSION="2.3.6"
+BUILD="26"
 
 echo "==> Cleaning $APP_DIR"
 rm -rf "$APP_DIR"
@@ -22,13 +23,18 @@ mkdir -p "$APP_DIR/Contents/MacOS" \
          "$APP_DIR/Contents/Resources/zh-Hans.lproj"
 
 echo "==> Compiling Swift sources"
+echo "==> Compiling native cursor service"
+xcrun clang -isysroot "$SDK_PATH" -arch arm64 -mmacosx-version-min=15.0 \
+  -O2 -fobjc-arc -framework Cocoa -framework ApplicationServices -framework ImageIO \
+  "$SRC/CursorService.m" -o "$APP_DIR/Contents/MacOS/CursorService"
 xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos15.0 \
   -O \
   -F "$SDK_PATH/System/Library/Frameworks" \
   -framework SwiftUI -framework AppKit -framework Cocoa \
   -framework UserNotifications -framework ServiceManagement -framework ApplicationServices \
   -o "$APP_DIR/Contents/MacOS/Scrollapp" \
-  "$SRC/ScrollappApp.swift" "$SRC/ContentView.swift" "$SRC/Localization.swift" "$SRC/StyledDialog.swift"
+  "$SRC/ScrollappApp.swift" "$SRC/ContentView.swift" "$SRC/Localization.swift" "$SRC/StyledDialog.swift" \
+  "$SRC/CursorThemes.swift" "$SRC/CursorSkinStore.swift" "$SRC/SkinSettingsView.swift"
 
 echo "==> Writing Info.plist"
 cat > "$APP_DIR/Contents/Info.plist" <<PLIST
@@ -39,7 +45,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 	<key>CFBundleDisplayName</key><string>Scrollapp</string>
 	<key>CFBundleExecutable</key><string>Scrollapp</string>
 	<key>CFBundleIconFile</key><string>AppIcon</string>
-	<key>CFBundleIdentifier</key><string>com.scrollapp.app</string>
+	<key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
 	<key>CFBundleName</key><string>Scrollapp</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
 	<key>CFBundleShortVersionString</key><string>${VERSION}</string>
@@ -50,7 +56,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 		<string>en</string>
 		<string>zh-Hans</string>
 	</array>
-	<key>LSMinimumSystemVersion</key><string>11.0</string>
+	<key>LSMinimumSystemVersion</key><string>15.0</string>
 	<key>LSUIElement</key><true/>
 	<key>NSHighResolutionCapable</key><true/>
 	<key>NSAccessibilityUsageDescription</key>
@@ -62,6 +68,9 @@ PLIST
 echo "==> Installing localization resources"
 cp "$SRC/en.lproj/InfoPlist.strings" "$APP_DIR/Contents/Resources/en.lproj/"
 cp "$SRC/zh-Hans.lproj/InfoPlist.strings" "$APP_DIR/Contents/Resources/zh-Hans.lproj/"
+mkdir -p "$APP_DIR/Contents/Resources/Skins"
+cp "$SRC/Skins/"*.plist "$APP_DIR/Contents/Resources/Skins/"
+cp "$SRC/Skins/"*.png "$APP_DIR/Contents/Resources/Skins/"
 
 echo "==> Embedding icon"
 if [ ! -f build/AppIcon.icns ] && [ -f img/scrollappicon.png ]; then

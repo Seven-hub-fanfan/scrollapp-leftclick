@@ -2,12 +2,12 @@ import SwiftUI
 
 // MARK: - Design tokens
 //
-// All metrics below are measured off the design mock (769×1149 px @2.083x,
-// i.e. a 369×552 pt window with a 30 pt title bar → 369×522 pt content area).
+// Base control metrics come from the design mock (769×1149 px @2.083x).
+// The general pane now includes a cursor-size card and uses 604 pt of height.
 
 enum Style {
     static let windowWidth: CGFloat = 370
-    static let windowHeight: CGFloat = 522        // content area, title bar excluded
+    static let windowHeight: CGFloat = 604        // general pane, title bar excluded
 
     static let outerPadH: CGFloat = 16
     static let cardPadH: CGFloat = 17
@@ -348,6 +348,7 @@ private struct MenuTrigger: NSViewRepresentable {
 // MARK: - Main view
 
 struct ContentView: View {
+    @ObservedObject private var skins = CursorSkinStore.shared
     @AppStorage("scrollSensitivity") private var sensitivity: Double = 1.0
     @AppStorage("invertScrollDirection") private var invertScroll = false
     @AppStorage("leftClickDoesNotInterrupt") private var leftClickNoInterrupt = false
@@ -379,6 +380,8 @@ struct ContentView: View {
             header
             Spacer().frame(height: 21)
             speedCard
+            Spacer().frame(height: Style.cardGap)
+            cursorSizeCard
             Spacer().frame(height: Style.cardGap)
             activationCard
             Spacer().frame(height: Style.cardGap)
@@ -476,6 +479,28 @@ struct ContentView: View {
                         NotificationCenter.default.post(name: NSNotification.Name("ScrollappActivationChanged"), object: nil)
                     }
                     .frame(height: 30)
+                }
+            }
+        }
+    }
+
+    private var cursorSizeCard: some View {
+        Card(padV: 11) {
+            VStack(alignment: .leading, spacing: 9) {
+                CardLabel(text: L10n.t("settings.cursorSize"))
+                HStack(spacing: 6) {
+                    TickSlider(value: Binding(get: { skins.cursorScale }, set: { skins.setCursorScale($0) }),
+                               range: CursorSizing.range, step: CursorSizing.step) {}
+                    Text(String(format: "%.1fx", skins.cursorScale))
+                        .font(.system(size: 12, weight: .semibold)).monospacedDigit()
+                        .foregroundColor(Style.primaryText)
+                        .frame(width: 40, height: 24)
+                        .background(Style.recess, in: RoundedRectangle(cornerRadius: 9))
+                }
+                .accessibilityRepresentation {
+                    Slider(value: Binding(get: { skins.cursorScale }, set: { skins.setCursorScale($0) }),
+                           in: CursorSizing.range, step: CursorSizing.step)
+                        .accessibilityLabel(L10n.t("settings.cursorSize"))
                 }
             }
         }

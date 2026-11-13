@@ -130,23 +130,43 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         // Set initial launch at login state based on saved preference
-        updateLoginItemState()
+        let isSkinPreview = CommandLine.arguments.contains("--skin-preview")
+        if !isSkinPreview { updateLoginItemState() }
         
         // Check and request Accessibility permissions
-        checkAccessibilityPermissions()
+        if !isSkinPreview { checkAccessibilityPermissions() }
         
         setupMenuBar()
         createScrollCursor()
-        setupMiddleClickListeners()
-        setupTrackpadActivation()
+        CursorSkinStore.shared.start()
+        NotificationCenter.default.addObserver(self, selector: #selector(cursorSkinDidChange),
+            name: NSNotification.Name("ScrollappCursorSkinChanged"), object: nil)
+        if !isSkinPreview {
+            setupMiddleClickListeners()
+            setupTrackpadActivation()
+        }
         
         // Request notification permission
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        if !isSkinPreview {
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        }
 
         // Listen for changes from the settings window
         for name in ["ScrollappSensitivityChanged", "ScrollappInvertChanged", "ScrollappLeftClickChanged", "ScrollappRightClickChanged", "ScrollappLaunchChanged", "ScrollappActivationChanged"] {
             NotificationCenter.default.addObserver(self, selector: #selector(settingsDidChange), name: NSNotification.Name(name), object: nil)
         }
+        if CommandLine.arguments.contains("--show-skins") {
+            CursorSkinStore.shared.section = "skins"
+            showSettingsWindow()
+        } else if CommandLine.arguments.contains("--show-settings") {
+            showSettingsWindow()
+        }
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        stopAutoScroll()
+        CursorSkinStore.shared.shutdown { sender.reply(toApplicationShouldTerminate: true) }
+        return .terminateLater
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -225,6 +245,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: L10n.t("menu.settings"), action: #selector(showSettingsWindow), keyEquivalent: ","))
+        menu.addItem(NSMenuItem(title: L10n.t("settings.skins"), action: #selector(showSkinSettings), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: L10n.t("menu.about"), action: #selector(showAbout), keyEquivalent: ""))
         
         let methodsMenu = NSMenu()
@@ -244,6 +265,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func createScrollCursor() {
+        if CursorSkinStore.shared.hasCustomCursor {
+            scrollCursor = nil
+            return
+        }
         let size = CGSize(width: 20, height: 20)
         let image = NSImage(size: size)
 
@@ -288,6 +313,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Apply the custom cursor (idempotent, safe to call from the scroll timer).
     func applyScrollCursor() {
+        // A global theme supplies the arrow. Keep it visible during scrolling;
+        // resetting a custom cursor every 10 ms would overwrite text/link states.
+        if CursorSkinStore.shared.hasCustomCursor {
+            if didHideCursor { NSCursor.unhide(); didHideCursor = false }
+            return
+        }
         guard shouldUseScrollCursor else {
             restoreCursor()
             return
@@ -305,7 +336,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSCursor.unhide()
             didHideCursor = false
         }
-        NSCursor.arrow.set()
+        CursorSkinStore.shared.activeCursor().set()
     }
 
     var lastClickTime: Date?
@@ -558,12 +589,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func showSettingsWindow() {
         if settingsWindow == nil {
-            let contentView = ContentView()
+            let contentView = SettingsRootView()
             let hostingController = NSHostingController(rootView: contentView)
             let window = NSWindow(contentViewController: hostingController)
             window.title = L10n.t("settings.windowTitle")
             window.styleMask = [.titled, .closable, .miniaturizable]
-            window.setContentSize(NSSize(width: 370, height: 522))
+            window.setContentSize(NSSize(width: 720, height: 620))
             // The redesigned UI uses a fixed light palette, so pin the appearance
             // and blend the title bar into the window background.
             window.appearance = NSAppearance(named: .aqua)
@@ -585,6 +616,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc func showSkinSettings() {
+        CursorSkinStore.shared.section = "skins"
+        showSettingsWindow()
+    }
+
+    @objc func cursorSkinDidChange() {
+        createScrollCursor()
+        if isAutoScrolling { applyScrollCursor() }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {

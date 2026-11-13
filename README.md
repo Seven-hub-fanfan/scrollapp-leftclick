@@ -1,6 +1,6 @@
 # Scrollapp
 
-[![GitHub Downloads](https://img.shields.io/github/downloads/fromis-9/scrollapp/total.svg)](https://github.com/fromis-9/scrollapp/releases)
+[![GitHub Downloads](https://img.shields.io/github/downloads/Seven-hub-fanfan/scrollapp-leftclick/total.svg)](https://github.com/Seven-hub-fanfan/scrollapp-leftclick/releases)
 
 A macOS utility that brings Windows-style auto-scrolling to macOS. Middle-click anywhere to enable auto-scroll mode, then move your cursor to control scrolling speed and direction.
 
@@ -16,10 +16,14 @@ A macOS utility that brings Windows-style auto-scrolling to macOS. Middle-click 
 - **Customizable Direction**: Option to invert scrolling direction based on preference
 - **Launch at Login**: Optional automatic startup
 - **Menu Bar Integration**: Quick access via status menu in the menu bar
+- **Global Cursor Skins**: System Default, Nai Wa and Xiao Qi, with favorites and previews
+- **Cursor Size**: Adjustable from 0.5× to 8×, with immediate local feedback
+- **High-resolution Xiao Qi**: Five PNG resolutions up to 512 px, generated from a 4× restored reference
+- **Cursor Recovery**: Restores the original cursors on quit or app crash
 
 ## Installation
 
-1. **Download**: Download the latest release from the [Releases](https://github.com/fromis-9/scrollapp/releases) page.
+1. **Download**: Download the Apple Silicon DMG from the [Releases](https://github.com/Seven-hub-fanfan/scrollapp-leftclick/releases) page.
 2. **Install**: Open the DMG file and drag Scrollapp to your Applications folder.
 3. **Security Override**: Since the app is distributed without Apple notarization, you'll need to manually allow it:
    - **Method 1**: Right-click on Scrollapp.app → "Open" → "Open" in the dialog
@@ -30,6 +34,13 @@ A macOS utility that brings Windows-style auto-scrolling to macOS. Middle-click 
      - Go to `System Settings > Privacy & Security > Accessibility` and add Scrollapp.
      - Go to `System Settings > Privacy & Security > Input Monitoring` and enable Scrollapp.
    - You may need to restart the app after granting permissions.
+
+Quit an older Scrollapp before replacing it. The new app may need its
+Accessibility and Input Monitoring permissions granted again.
+
+Open **Cursor Skins** from the menu bar to select and apply a skin.
+Open **General** to adjust cursor size. **Reset** or quitting the app restores
+the original cursors.
 
 ## How to Use
 
@@ -83,9 +94,13 @@ Access additional options from the menu bar icon:
 
 ## System Requirements
 
-- macOS 11.0 (Big Sur) or later
+- macOS 15.0 (Sequoia) or later
 - Mouse with middle button, side buttons, or trackpad support
-- Compatible with both Intel and Apple Silicon Macs
+- This release supports Apple Silicon Macs (arm64)
+
+Global cursor skins use private macOS interfaces and have been verified on
+macOS 26.6.2. Compatibility with other system versions and app-drawn cursors
+requires separate validation.
 
 ## Privacy & Security
 
@@ -98,33 +113,17 @@ Access additional options from the menu bar icon:
 
 ## Building from Source
 
-To build Scrollapp from source:
+Clone `https://github.com/Seven-hub-fanfan/scrollapp-leftclick` and install
+Xcode Command Line Tools. From the repository root:
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/your-username/scrollapp.git
-   cd scrollapp
-   ```
+```bash
+bash scripts/build_app.sh
+bash scripts/create_dmg_from_app.sh
+```
 
-2. **Open in Xcode:**
-   ```bash
-   open Scrollapp.xcodeproj
-   ```
-
-3. **Build the app:**
-
-   **Option A: With Apple Developer Program Account**
-   - In Xcode, select **Product** → **Archive**
-   - Click **Distribute App** → **Copy App**
-   - Choose a location to export the built app
-
-   **Option B: Without Developer Account (Free)**
-   - In Xcode, select **Product** → **Build** (⌘+B)
-   - Navigate to the build folder: **Product** → **Show Build Folder in Finder**
-   - Find your app in `Build/Products/Release/Scrollapp.app`
-   - Copy the app to your Applications folder or wherever you'd like
-
-The project is configured to build universal binaries that work on both Intel and Apple Silicon Macs.
+The scripts produce `build/Scrollapp.app` and a versioned DMG. No Xcode project
+or third-party runtime dependencies are required. See [build scripts](scripts/README.md)
+and [cursor theme resources](Scrollapp/Skins/README.md) for details.
 
 ## Feedback and Contributions
 

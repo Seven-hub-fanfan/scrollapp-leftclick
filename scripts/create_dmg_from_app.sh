@@ -1,99 +1,52 @@
 #!/bin/bash
+# Package an existing signed app without changing its identity or signature.
+# Usage: bash scripts/create_dmg_from_app.sh [APP_PATH] [OUTPUT_PATH]
+set -euo pipefail
 
-# Create DMG from existing Scrollapp.app (built via Xcode Archive)
-# Usage: ./create_dmg_from_app.sh /path/to/Scrollapp.app
-
-set -e  # Exit on any error
-
-if [ $# -eq 0 ]; then
-    echo "ERROR: Please provide path to Scrollapp.app"
-    echo "Usage: $0 /path/to/Scrollapp.app"
-    echo ""
-    echo "To build the app:"
-    echo "1. Open Scrollapp.xcodeproj in Xcode"
-    echo "2. Product → Archive"
-    echo "3. Distribute App → Copy App"
-    echo "4. Run: $0 /path/to/exported/Scrollapp.app"
-    exit 1
-fi
-
-APP_PATH="$1"
-VERSION="1.0"
-DMG_NAME="Scrollapp-v${VERSION}-Xcode"
-DMG_DIR="dmg_temp"
-
-# Validate input
-if [ ! -d "$APP_PATH" ]; then
-    echo "ERROR: $APP_PATH not found or not a directory"
-    exit 1
-fi
-
+PROJECT_ROOT="$(dirname "$(dirname "$(realpath "$0")")")"
+APP_PATH="${1:-$PROJECT_ROOT/build/Scrollapp.app}"
 if [ ! -f "$APP_PATH/Contents/MacOS/Scrollapp" ]; then
-    echo "ERROR: $APP_PATH doesn't appear to be a valid Scrollapp.app"
+    echo "ERROR: Build Scrollapp.app first with scripts/build_app.sh." >&2
     exit 1
 fi
 
-echo "Creating DMG from Xcode-built app..."
-echo "App: $APP_PATH"
-
-# Clean previous builds
-echo "Cleaning previous DMG..."
-rm -rf "${DMG_DIR}"
-rm -rf "${DMG_NAME}.dmg"
-
-# Verify the app
-echo "Verifying app..."
-BINARY_PATH="$APP_PATH/Contents/MacOS/Scrollapp"
-if [ -f "$BINARY_PATH" ]; then
-    echo "Architecture: $(lipo -info "$BINARY_PATH")"
-    echo "Code signature: $(codesign -dv "$APP_PATH" 2>&1 | head -1 || echo "Ad-hoc signed")"
-else
-    echo "WARNING: Binary not found for verification"
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")"
+ARCHITECTURES="$(lipo -archs "$APP_PATH/Contents/MacOS/Scrollapp")"
+case "$ARCHITECTURES" in
+    arm64|x86_64) ARCH_LABEL="$ARCHITECTURES" ;;
+    "arm64 x86_64"|"x86_64 arm64") ARCH_LABEL="universal" ;;
+    *) echo "ERROR: Unsupported app architecture: $ARCHITECTURES" >&2; exit 1 ;;
+esac
+OUTPUT_PATH="${2:-$PROJECT_ROOT/build/Scrollapp-$VERSION-$ARCH_LABEL.dmg}"
+if [ -e "$OUTPUT_PATH" ]; then
+    echo "ERROR: Output already exists: $OUTPUT_PATH" >&2
+    exit 1
 fi
+codesign --verify --deep --strict "$APP_PATH"
 
-# Create DMG directory structure
-echo "Creating DMG structure..."
-mkdir -p "${DMG_DIR}"
+STAGING="$(mktemp -d "${TMPDIR:-/tmp/}scrollapp-dmg.XXXXXX")"
+trap 'rm -rf "$STAGING"' EXIT
+mkdir "$STAGING/payload"
+ditto "$APP_PATH" "$STAGING/payload/Scrollapp.app"
+ln -s /Applications "$STAGING/payload/Applications"
+cat > "$STAGING/payload/安装说明.txt" <<'INSTALL'
+Scrollapp 安装说明
 
-# Copy app to DMG directory
-echo "Copying app to DMG..."
-cp -R "$APP_PATH" "${DMG_DIR}/"
+1. 退出正在运行的旧版 Scrollapp。
+2. 将 Scrollapp.app 拖到 Applications（应用程序）。
+3. 打开应用程序中的 Scrollapp。
+4. 如 macOS 阻止打开，在“系统设置 → 隐私与安全性”中选择“仍要打开”。
+5. 按提示授予辅助功能、输入监控权限，然后重新打开 Scrollapp。
 
-# Re-sign with ad-hoc signature to remove personal info
-echo "Re-signing with ad-hoc signature..."
-codesign --force --deep --sign - --timestamp=none --identifier "com.scrollapp.Scrollapp" "${DMG_DIR}/Scrollapp.app" 2>/dev/null || echo "Code signing failed - continuing anyway"
+在菜单栏打开“光标皮肤”，选择皮肤并点击“应用皮肤”。
+“通用”页面可设置 0.5–8 倍鼠标大小。
+退出 Scrollapp 时恢复原始系统光标。
 
-# Create Applications symlink
-ln -s /Applications "${DMG_DIR}/Applications"
-
-# Create the DMG
-echo "Creating compressed DMG..."
-
-# Calculate size needed
-SIZE=$(du -sm "${DMG_DIR}" | cut -f1)
-SIZE=$((SIZE + 20))  # Add padding
-
-# Create DMG
-hdiutil create -srcfolder "${DMG_DIR}" -volname "Scrollapp" -fs HFS+ \
-    -fsargs "-c c=64,a=16,e=16" -format UDZO -size ${SIZE}m -imagekey zlib-level=9 \
-    "${DMG_NAME}.dmg"
-
-# Clean up
-echo "Cleaning up..."
-rm -rf "${DMG_DIR}"
-
-echo ""
-echo "DMG created successfully!"
-echo "File: ${DMG_NAME}.dmg"
-echo "Size: $(du -h "${DMG_NAME}.dmg" | cut -f1)"
-echo ""
-echo "XCODE BUILD COMPLETE:"
-echo "• Professional build quality"
-echo "• Ready for distribution"
-echo "• Compatible with Intel + Apple Silicon"
-echo ""
-echo "Next steps:"
-echo "1. Test the DMG installation"
-echo "2. Upload to GitHub releases"
-echo "3. Share with users!"
-echo "" 
+本安装包使用本地 ad-hoc 签名，未经过 Apple 公证。
+INSTALL
+codesign --verify --deep --strict "$STAGING/payload/Scrollapp.app"
+hdiutil create -srcfolder "$STAGING/payload" -volname "Scrollapp $VERSION" \
+    -fs HFS+ -format UDZO -imagekey zlib-level=9 "$STAGING/Scrollapp.dmg"
+mkdir -p "$(dirname "$OUTPUT_PATH")"
+mv "$STAGING/Scrollapp.dmg" "$OUTPUT_PATH"
+echo "Created $OUTPUT_PATH ($ARCH_LABEL)"

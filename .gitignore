@@ -136,7 +136,9 @@ CVS/
 *.dSYM
 
 # Scripts and build tools
-scripts/
+scripts/*
+!scripts/run_app.sh
+!scripts/verify_cursor_service.py
 
 # Temporary files  
 dmg_temp/

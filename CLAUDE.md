@@ -6,7 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Fork of `fromis-9/scrollapp` — macOS menu bar app for Windows-style auto-scrolling via middle-click. Adds left-click interruption toggle, settings window, and activation HUD.
 
-Written in Swift, compiled from command line (no Xcode required). macOS 11.0+, Apple Silicon.
+Written in Swift and a small Objective-C cursor service, compiled from command
+line (no Xcode required). macOS 15.0+, Apple Silicon.
 
 ## Build and install
 
@@ -17,8 +18,10 @@ Use the build script (compiles sources, writes Info.plist, generates the icon fr
 ./scripts/build_app.sh   # -> build/Scrollapp.app
 ```
 
-It compiles `Scrollapp/{ScrollappApp,ContentView,Localization}.swift` with
-`xcrun swiftc -target arm64-apple-macos15.0` (SwiftUI APIs used require 15.0).
+It compiles the app's Swift sources with `xcrun swiftc -target arm64-apple-macos15.0`,
+and `CursorService.m` with Clang. SwiftUI APIs used require 15.0.
+`bash scripts/run_app.sh` opens an isolated skin preview; reusable launch
+configuration is in `.trae/environments/run.json`.
 
 ## Localization
 
@@ -41,7 +44,17 @@ is Chinese.
 
 ## Architecture
 
-All logic in `ScrollappApp.swift` (~760 lines), a single `AppDelegate: NSObject, NSApplicationDelegate` class.
+**Cursor skins:** `SettingsRootView` adds General / Cursor Skins navigation.
+`CursorCatalog` separates theme artwork from system cursor mappings; resources
+and extension instructions are in `Scrollapp/Skins`. `CursorSkinStore` serializes
+service requests and stores only successfully applied theme IDs.
+`CursorService.m` is independently implemented and uses dynamically resolved
+private APIs, an atomic recovery journal and a kqueue parent-lifetime guard.
+Normal quit waits for restoration; app crash restores via the helper; helper
+crash triggers one recovery reconnect. Preserve Wait/Empty/busy/disappearing
+states. Do not add skin rendering or reload work to the 10 ms scroll loop.
+
+**Scrolling:** logic in `ScrollappApp.swift`, in `AppDelegate: NSObject, NSApplicationDelegate`.
 
 **Event monitors:**
 - `globalMonitor`/`localMonitor` — detect activation button (middle-click by default) via `.otherMouseDown`
