@@ -139,6 +139,7 @@ CVS/
 scripts/*
 !scripts/run_app.sh
 !scripts/verify_cursor_service.py
+!scripts/verify_cursor_raster.swift
 
 # Temporary files  
 dmg_temp/

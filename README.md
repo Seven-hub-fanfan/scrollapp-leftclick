@@ -39,8 +39,9 @@ Quit an older Scrollapp before replacing it. The new app may need its
 Accessibility and Input Monitoring permissions granted again.
 
 Open **Cursor Skins** from the menu bar to select and apply a skin.
-Open **General** to adjust cursor size. **Reset** or quitting the app restores
-the original cursors.
+Open **General** to adjust cursor size and enable the red click hotspot. Its
+3–16 pt diameter is independent of cursor size. **Reset** selects the system
+skin while keeping size and hotspot settings; quitting restores the original cursors.
 
 ## How to Use
 

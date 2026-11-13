@@ -49,6 +49,22 @@ python3 scripts/verify_cursor_service.py --global \
 
 The checks temporarily replace cursors and verify complete recovery.
 
+### `verify_cursor_raster.swift`
+
+Checks fixed master selection across previous resolution thresholds, explicit
+1x/2x representations, marker geometry and padding, animation frame order,
+local cursor sizes/hotspots, and repeated shrink/grow cycles for both skins.
+It exports current payloads and preview PNGs to an external test directory.
+
+Compile it together with `CursorThemes.swift` and `Localization.swift`, link an
+Objective-C object built from `CursorRaster.m`, and pass
+`-import-objc-header Scrollapp/CursorRaster.h`. Place the executable under
+`Test.app/Contents/MacOS` and copy current `Skins` resources to
+`Test.app/Contents/Resources/Skins` so `Bundle.main` resolves them. Run the
+executable with the output directory as its sole argument. It makes no global
+cursor changes. Quit any active Scrollapp before exporting genuine system
+images or running the separate global service checks.
+
 ## Quick Start
 
 ```bash

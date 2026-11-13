@@ -53,11 +53,11 @@ private struct SkinLibraryView: View {
     @ObservedObject var store: CursorSkinStore
     @AppStorage("cursorFavorites") private var favoriteIDs = ""
     @State private var filter = "all"
-    private let filters = ["all", "minimal", "colorful", "favorites"]
+    private let filters = ["all", "favorites"]
     private var favorites: Set<String> { Set(favoriteIDs.split(separator: ",").map(String.init)) }
     private var visibleThemes: [CursorTheme] {
         CursorCatalog.themes.filter {
-            filter == "all" || (filter == "favorites" ? favorites.contains($0.id) : $0.category == filter)
+            filter == "all" || favorites.contains($0.id)
         }
     }
     private var gridHeight: CGFloat {
@@ -236,7 +236,8 @@ private struct CursorHoverPreview: NSViewRepresentable {
     func makeNSView(context: Context) -> SampleView { SampleView() }
     func updateNSView(_ view: SampleView, context: Context) {
         view.image = CursorCatalog.image(theme, role: role)
-        view.cursor = CursorCatalog.cursor(theme, role: role, scale: CursorSkinStore.shared.cursorScale)
+        view.cursor = CursorCatalog.cursor(theme, role: role, scale: CursorSkinStore.shared.cursorScale,
+            markerDiameter: CursorSkinStore.shared.markerDiameter)
         view.window?.invalidateCursorRects(for: view)
         view.needsDisplay = true
         view.setAccessibilityLabel(role.label)

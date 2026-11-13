@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import struct
+import math
 
 
 def response(service):
@@ -61,6 +62,10 @@ def main():
             result = send(service, action="apply", path=str(directory / "frog.plist"), scale=scale)
             assert not result["ok"] and not journal.exists(), result
             results.append({"test": f"reject-scale-{scale}", **result})
+        for marker in [-1, 17]:
+            result = send(service, action="apply", path=str(directory / "frog.plist"), markerDiameter=marker)
+            assert not result["ok"] and not journal.exists(), result
+            results.append({"test": f"reject-marker-{marker}", **result})
 
         for theme in ["frog", "frog"]:
             result = send(service, action="apply", path=str(directory / f"{theme}.plist"))
@@ -89,7 +94,8 @@ def main():
                         original.pop("Representations", None)
                         assert verified["namedReadback"][name] == original, (name, verified)
                 else:
-                    assert send(service, action="system", names=list(source["Cursors"]), scale=scale)["ok"]
+                    result = send(service, action="system", names=list(source["Cursors"]), scale=scale)
+                    assert result["ok"], result
                     system = send(service, action="verify", names=fallback_names)
                     assert system["ok"] and system["namedReadback"] == verified["namedReadback"], (system, verified)
                 results.append({"test": f"apply-xiaoqi-{scale}", **result, "readback": verified})
@@ -108,6 +114,38 @@ def main():
             assert verified["arrowHotSpot"] == expected_spot, verified
             results.append({"test": f"resize-{theme}-{scale}", **result, "readback": verified})
         names = list(source["Cursors"])
+        # Marker padding must shift the artwork and hotspot equally. Check
+        # both theme resources through real WindowServer readback, then revisit
+        # previous sizes to detect any accumulation or stale registrations.
+        for theme in ["frog", "xiaoqi"]:
+            path = directory / f"{theme}.plist"
+            if not path.exists():
+                continue
+            arrow = plistlib.loads(path.read_bytes())["Cursors"]["com.apple.coregraphics.Arrow"]
+            states = {}
+            for scale in [0.5, 8, 1, 1.8, 2.4, 2.5, 2.6, 4.9, 5, 5.1, 8, 0.5, 1.8]:
+                for marker in [5, 16]:
+                    result = send(service, action="apply", path=str(path), scale=scale, markerDiameter=marker)
+                    assert result["ok"], result
+                    verified = send(service, action="verify", names=["com.apple.coregraphics.Arrow"])
+                    w, h = round(arrow["PointsWide"] * scale), round(arrow["PointsHigh"] * scale)
+                    float32 = lambda value: struct.unpack("f", struct.pack("f", value))[0]
+                    x, y = float32(arrow["HotSpotX"] * w / arrow["PointsWide"]), float32(arrow["HotSpotY"] * h / arrow["PointsHigh"])
+                    radius = marker / 2 + 1
+                    left, top = math.ceil(max(0, radius - x)), math.ceil(max(0, radius - y))
+                    right, bottom = math.ceil(max(0, x + radius - w)), math.ceil(max(0, y + radius - h))
+                    assert verified["ok"] and verified["arrowPoints"] == [w + left + right, h + top + bottom], verified
+                    assert verified["arrowHotSpot"] == [float32(x + left), float32(y + top)], verified
+                    actual = verified["namedReadback"]["com.apple.coregraphics.Arrow"]
+                    key = (scale, marker)
+                    assert key not in states or actual == states[key], (key, actual)
+                    states[key] = actual
+            results.append({"test": f"{theme}-repeated-scale-and-fixed-marker", "ok": True, "uniqueStates": len(states)})
+        assert send(service, action="system", names=names, scale=1, markerDiameter=5)["ok"]
+        assert send(service, action="verify")["ok"]
+        result = send(service, action="system", names=names, scale=1, markerDiameter=0)
+        assert result["ok"] and not journal.exists(), result
+        results.append({"test": "system-marker-disable-restores", **result})
         for scale in [0.5, 1.5, 3.0, 4.0, 6.0, 8.0]:
             result = send(service, action="system", names=names, scale=scale)
             assert result["ok"], result
@@ -173,7 +211,8 @@ signal.pause()
     replacement.wait(timeout=15)
     results.append({"test": "stale-journal-recovery", "ok": True})
     (directory / "service-verification.json").write_text(json.dumps(results, indent=2))
-    print(json.dumps(results, indent=2))
+    print(json.dumps({"checks": len(results), "passed": True,
+                      "results": str(directory / "service-verification.json")}, indent=2))
 
 
 if __name__ == "__main__":

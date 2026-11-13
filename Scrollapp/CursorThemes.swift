@@ -7,6 +7,11 @@ enum CursorSizing {
     static let step = 0.1
 }
 
+enum CursorMarkerSizing {
+    static let range: ClosedRange<Double> = 3...16
+    static let defaultSize = 5.0
+}
+
 enum CursorRole: String, CaseIterable {
     case arrow, text, link, grab, crosshair, horizontal, vertical, diagonalRight, diagonalLeft, unavailable, help, zoomIn, zoomOut
     var label: String { L10n.t("skins.role.\(rawValue)") }
@@ -14,7 +19,6 @@ enum CursorRole: String, CaseIterable {
 
 struct CursorTheme: Identifiable {
     let id: String
-    let category: String
     let color: Color
     let resource: String?
     var name: String { L10n.t("skins.\(id).name") }
@@ -25,9 +29,9 @@ struct CursorTheme: Identifiable {
 // in one versioned mapping, rather than being duplicated in every skin.
 enum CursorCatalog {
     static let themes: [CursorTheme] = [
-        .init(id: "system", category: "minimal", color: Color(red: 0.87, green: 0.88, blue: 0.90), resource: nil),
-        .init(id: "frog", category: "colorful", color: Color(red: 0.87, green: 0.94, blue: 0.78), resource: "Frog"),
-        .init(id: "xiaoqi", category: "colorful", color: Color(red: 0.92, green: 0.94, blue: 0.79), resource: "Xiaoqi")
+        .init(id: "system", color: Color(red: 0.87, green: 0.88, blue: 0.90), resource: nil),
+        .init(id: "frog", color: Color(red: 0.87, green: 0.94, blue: 0.78), resource: "Frog"),
+        .init(id: "xiaoqi", color: Color(red: 0.92, green: 0.94, blue: 0.79), resource: "Xiaoqi")
     ]
     static func theme(_ id: String) -> CursorTheme { themes.first { $0.id == id } ?? themes[0] }
     static let mapping: [String: CursorRole] = {
@@ -64,6 +68,9 @@ enum CursorCatalog {
     private static var thumbnails: [String: NSImage] = [:]
     private static var systemImages: [CursorRole: NSImage] = [:]
     private static var systemHotSpots: [CursorRole: NSPoint] = [:]
+    private static var systemDescriptors: [CursorRole: [String: Any]] = [:]
+    private static var cursorCache: [String: NSCursor] = [:]
+    private static var cursorCacheOrder: [String] = []
     static func captureSystemImages() {
         guard systemImages.isEmpty else { return }
         for role in CursorRole.allCases {
@@ -156,7 +163,7 @@ enum CursorCatalog {
         return (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue ?? 0
     }
 
-    static func image(_ theme: CursorTheme, role: CursorRole, minimumPixels: Int = 64) -> NSImage {
+    static func image(_ theme: CursorTheme, role: CursorRole) -> NSImage {
         if theme.id == "system" {
             return systemImages[role] ?? systemCursor(role).image
         }
@@ -165,47 +172,53 @@ enum CursorCatalog {
             return systemImages[role] ?? systemCursor(role).image
         }
         guard let pngs = descriptor?["Representations"] as? [Data],
-              let data = pngs.first(where: { pixelWidth($0) >= minimumPixels }) ?? pngs.last,
+              let data = pngs.max(by: { pixelWidth($0) < pixelWidth($1) }),
               let image = NSImage(data: data) else { return NSCursor.arrow.image }
         image.size = NSSize(width: 32, height: 32)
         return image
     }
 
-    static func cursor(_ theme: CursorTheme, role: CursorRole, scale: Double) -> NSCursor {
-        let logicalWidth = theme.id == "system" ? 32 :
-            (roles(for: theme)[role.rawValue]?["PointsWide"] as? Double) ?? 32
-        let base = image(theme, role: role, minimumPixels: Int((logicalWidth * scale).rounded() * 2))
-        let size = NSSize(width: (base.size.width * scale).rounded(),
-                          height: (base.size.height * scale).rounded())
-        let scaled: NSImage
-        if scale == 1 {
-            scaled = base.copy() as! NSImage
-        } else {
-            let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil,
-                pixelsWide: Int(size.width * 2), pixelsHigh: Int(size.height * 2),
-                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
-            NSGraphicsContext.saveGraphicsState()
-            let context = NSGraphicsContext(bitmapImageRep: bitmap)!
-            context.imageInterpolation = theme.id == "mint" ? .none : .high
-            NSGraphicsContext.current = context
-            base.draw(in: NSRect(origin: .zero, size: NSSize(width: size.width * 2, height: size.height * 2)))
-            NSGraphicsContext.restoreGraphicsState()
+    static func cursor(_ theme: CursorTheme, role: CursorRole, scale: Double, markerDiameter: Double = 0) -> NSCursor {
+        let key = "\(theme.id).\(role.rawValue).\(scale).\(markerDiameter)"
+        if let cached = cursorCache[key] { return cached }
+        var descriptor = roles(for: theme)[role.rawValue]
+        if theme.id == "system" || descriptor?["RestoreOriginal"] as? Bool == true {
+            if let cached = systemDescriptors[role] {
+                descriptor = cached
+            } else {
+                let base = systemImages[role] ?? systemCursor(role).image
+                let spot = systemHotSpots[role] ?? systemCursor(role).hotSpot
+                var pngs = base.representations.compactMap {
+                    ($0 as? NSBitmapImageRep)?.representation(using: .png, properties: [:])
+                }
+                if pngs.isEmpty, let tiff = base.tiffRepresentation,
+                   let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                    pngs = [png]
+                }
+                descriptor = ["PointsWide": base.size.width, "PointsHigh": base.size.height,
+                    "HotSpotX": spot.x, "HotSpotY": spot.y, "FrameCount": 1,
+                    "FrameDuration": 0, "Representations": pngs]
+                systemDescriptors[role] = descriptor
+            }
+        }
+        guard let descriptor, let rendered = SCRCursorRaster.render(descriptor, scale: scale,
+            pixelated: theme.id == "mint", markerDiameter: markerDiameter),
+            let pngs = rendered["Representations"] as? [Data],
+            let w = rendered["PointsWide"] as? Double, let h = rendered["PointsHigh"] as? Double,
+            let x = rendered["HotSpotX"] as? Double, let y = rendered["HotSpotY"] as? Double
+        else { return systemCursor(role) }
+        let size = NSSize(width: w, height: h)
+        let image = NSImage(size: size)
+        for png in pngs {
+            guard let bitmap = NSBitmapImageRep(data: png) else { continue }
             bitmap.size = size
-            scaled = NSImage(size: size)
-            scaled.addRepresentation(bitmap)
+            image.addRepresentation(bitmap)
         }
-        let spot: NSPoint
-        if theme.id == "system" || roles(for: theme)[role.rawValue]?["RestoreOriginal"] as? Bool == true {
-            spot = systemHotSpots[role] ?? systemCursor(role).hotSpot
-        } else {
-            let d = roles(for: theme)[role.rawValue]
-            spot = NSPoint(x: (d?["HotSpotX"] as? CGFloat) ?? 1, y: (d?["HotSpotY"] as? CGFloat) ?? 1)
-        }
-        scaled.size = size
-        return NSCursor(image: scaled, hotSpot: NSPoint(
-            x: CGFloat(Float(spot.x * size.width / base.size.width)),
-            y: CGFloat(Float(spot.y * size.height / base.size.height))))
+        let cursor = NSCursor(image: image, hotSpot: NSPoint(x: x, y: y))
+        cursorCache[key] = cursor
+        cursorCacheOrder.append(key)
+        if cursorCacheOrder.count > 16 { cursorCache.removeValue(forKey: cursorCacheOrder.removeFirst()) }
+        return cursor
     }
 }
 

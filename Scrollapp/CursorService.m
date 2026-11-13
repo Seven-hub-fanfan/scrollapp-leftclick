@@ -5,6 +5,7 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import <ImageIO/ImageIO.h>
 #import <CommonCrypto/CommonDigest.h>
+#import "CursorRaster.h"
 #include <dlfcn.h>
 #include <sys/event.h>
 #include <sys/file.h>
@@ -288,51 +289,11 @@ static NSDictionary *commitPlan(NSDictionary *plan) {
     activePlan = plan;
     return @{@"ok":@YES, @"applied":@(plan.count)};
 }
-// Resample the entire vertical frame strip while scaling logical dimensions
-// and hotspots together. Keep 1x/2x outputs, even if a system backup has 5x/10x.
-static NSDictionary *scaledDescriptor(NSDictionary *original, double scale, BOOL pixelated) {
-    double w = [original[@"PointsWide"] doubleValue], h = [original[@"PointsHigh"] doubleValue];
-    NSUInteger frames = [original[@"FrameCount"] unsignedIntegerValue];
-    double targetW = round(w * scale), targetH = round(h * scale);
-    if (w <= 0 || h <= 0 || !frames || targetW > 512 || targetH > 512) return nil;
-    NSArray *sources = imagesFor(original);
-    if (!sources.count) return nil;
-    NSMutableArray *pngs = [NSMutableArray array];
-    for (int density = 1; density <= 2; density++) {
-        size_t width = (size_t)targetW * density, height = (size_t)targetH * density * frames;
-        CGImageRef source = (__bridge CGImageRef)sources.lastObject;
-        for (id value in sources) {
-            CGImageRef candidate = (__bridge CGImageRef)value;
-            if (CGImageGetWidth(candidate) >= width) { source = candidate; break; }
-        }
-        CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-        CGContextRef context = CGBitmapContextCreate(NULL, width, height, 8, width * 4, space,
-            kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
-        CGColorSpaceRelease(space);
-        if (!context) return nil;
-        CGContextSetInterpolationQuality(context, pixelated ? kCGInterpolationNone : kCGInterpolationHigh);
-        CGContextDrawImage(context, CGRectMake(0, 0, width, height), source);
-        CGImageRef image = CGBitmapContextCreateImage(context);
-        CGContextRelease(context);
-        NSData *png = image ? encode(image) : nil;
-        if (image) CGImageRelease(image);
-        if (!png) return nil;
-        [pngs addObject:png];
-    }
-    NSMutableDictionary *result = original.mutableCopy;
-    result[@"PointsWide"] = @(targetW); result[@"PointsHigh"] = @(targetH);
-    // WindowServer stores hotspots as float32. Quantize once here so strict
-    // readback comparison also works for fractional system hotspot coordinates.
-    result[@"HotSpotX"] = @((double)(float)([original[@"HotSpotX"] doubleValue] * targetW / w));
-    result[@"HotSpotY"] = @((double)(float)([original[@"HotSpotY"] doubleValue] * targetH / h));
-    result[@"Representations"] = pngs;
-    [result removeObjectForKey:@"PixelHashes"];
-    return result;
-}
-static NSDictionary *apply(NSDictionary *plan, double scale, BOOL pixelated) {
+static NSDictionary *apply(NSDictionary *plan, double scale, BOOL pixelated, double markerDiameter) {
     NSString *error = validate(plan);
     if (error) return @{@"ok":@NO, @"error":error};
-    if (!isfinite(scale) || scale < 0.5 || scale > 8) return @{@"ok":@NO, @"error":@"invalidMetadata"};
+    if (!isfinite(scale) || scale < 0.5 || scale > 8 || !isfinite(markerDiameter) ||
+        markerDiameter < 0 || markerDiameter > 16) return @{@"ok":@NO, @"error":@"invalidMetadata"};
     NSDictionary *backup = ensureBackup(plan);
     if (![backup[@"ok"] boolValue]) return backup;
     NSMutableDictionary *resolved = [NSMutableDictionary dictionary];
@@ -342,8 +303,9 @@ static NSDictionary *apply(NSDictionary *plan, double scale, BOOL pixelated) {
         NSDictionary *source = useOriginal ? journal[@"Names"][name][@"Original"] : plan[name];
         if (!source) continue; // Keep an originally absent system registration.
         NSDictionary *d = source;
-        if (scale != 1) {
-            d = cache[source] ?: scaledDescriptor(source, scale, useOriginal ? NO : pixelated);
+        if (!useOriginal || scale != 1 || markerDiameter > 0) {
+            d = cache[source] ?: [SCRCursorRaster renderDescriptor:source scale:scale
+                pixelated:useOriginal ? NO : pixelated markerDiameter:markerDiameter];
             if (!d) return @{@"ok":@NO, @"error":@"invalidImages"};
             cache[source] = d;
         }
@@ -351,9 +313,10 @@ static NSDictionary *apply(NSDictionary *plan, double scale, BOOL pixelated) {
     }
     return commitPlan(resolved);
 }
-static NSDictionary *applySystem(NSArray *names, double scale) {
-    if (!isfinite(scale) || scale < 0.5 || scale > 8) return @{@"ok":@NO, @"error":@"invalidMetadata"};
-    if (scale == 1) return restore();
+static NSDictionary *applySystem(NSArray *names, double scale, double markerDiameter) {
+    if (!isfinite(scale) || scale < 0.5 || scale > 8 || !isfinite(markerDiameter) ||
+        markerDiameter < 0 || markerDiameter > 16) return @{@"ok":@NO, @"error":@"invalidMetadata"};
+    if (scale == 1 && markerDiameter == 0) return restore();
     if (![names isKindOfClass:NSArray.class] || !names.count || names.count > 128)
         return @{@"ok":@NO, @"error":@"invalidPayload"};
     NSMutableDictionary *keys = [NSMutableDictionary dictionary];
@@ -373,7 +336,8 @@ static NSDictionary *applySystem(NSArray *names, double scale) {
     for (NSString *name in keys) {
         NSDictionary *original = journal[@"Names"][name][@"Original"];
         if (!original) continue; // Preserve an originally absent registration.
-        NSDictionary *d = cache[original] ?: scaledDescriptor(original, scale, NO);
+        NSDictionary *d = cache[original] ?: [SCRCursorRaster renderDescriptor:original scale:scale
+            pixelated:NO markerDiameter:markerDiameter];
         if (!d) return @{@"ok":@NO, @"error":@"invalidImages"};
         cache[original] = d;
         plan[name] = d;
@@ -445,9 +409,11 @@ int main(int argc, const char *argv[]) {
                         NSString *path = command[@"path"];
                         NSDictionary *payload = [path isKindOfClass:NSString.class] ? load(path) : nil;
                         double scale = command[@"scale"] ? [command[@"scale"] doubleValue] : 1;
-                        emit(apply(payload[@"Cursors"], scale, [command[@"pixelated"] boolValue]));
+                        emit(apply(payload[@"Cursors"], scale, [command[@"pixelated"] boolValue],
+                            [command[@"markerDiameter"] doubleValue]));
                     } else if ([action isEqual:@"system"]) {
-                        emit(applySystem(command[@"names"], [command[@"scale"] doubleValue]));
+                        emit(applySystem(command[@"names"], [command[@"scale"] doubleValue],
+                            [command[@"markerDiameter"] doubleValue]));
                     } else if ([action isEqual:@"reset"] || [action isEqual:@"quit"]) {
                         NSDictionary *result = restore(); emit(result);
                         finished = [action isEqual:@"quit"];

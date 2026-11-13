@@ -13,8 +13,8 @@ SDK_PATH="$(xcrun --show-sdk-path)"
 APP_DIR="${SCROLLAPP_OUTPUT_DIR:-build/Scrollapp.app}"
 BUNDLE_ID="${SCROLLAPP_BUNDLE_ID:-com.scrollapp.app}"
 SRC="Scrollapp"
-VERSION="2.3.6"
-BUILD="26"
+VERSION="2.3.8"
+BUILD="28"
 
 echo "==> Cleaning $APP_DIR"
 rm -rf "$APP_DIR"
@@ -26,9 +26,14 @@ echo "==> Compiling Swift sources"
 echo "==> Compiling native cursor service"
 xcrun clang -isysroot "$SDK_PATH" -arch arm64 -mmacosx-version-min=15.0 \
   -O2 -fobjc-arc -framework Cocoa -framework ApplicationServices -framework ImageIO \
-  "$SRC/CursorService.m" -o "$APP_DIR/Contents/MacOS/CursorService"
+  "$SRC/CursorService.m" "$SRC/CursorRaster.m" -o "$APP_DIR/Contents/MacOS/CursorService"
+RASTER_OBJECT="$(mktemp "${TMPDIR:-/tmp/}scrollapp-raster.XXXXXX")"
+trap 'rm -f "$RASTER_OBJECT"' EXIT
+xcrun clang -isysroot "$SDK_PATH" -arch arm64 -mmacosx-version-min=15.0 \
+  -O2 -fobjc-arc -c "$SRC/CursorRaster.m" -o "$RASTER_OBJECT"
 xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos15.0 \
   -O \
+  -import-objc-header "$SRC/CursorRaster.h" "$RASTER_OBJECT" \
   -F "$SDK_PATH/System/Library/Frameworks" \
   -framework SwiftUI -framework AppKit -framework Cocoa \
   -framework UserNotifications -framework ServiceManagement -framework ApplicationServices \

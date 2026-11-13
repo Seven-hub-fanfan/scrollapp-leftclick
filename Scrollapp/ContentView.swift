@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - Design tokens
 //
 // Base control metrics come from the design mock (769×1149 px @2.083x).
-// The general pane now includes a cursor-size card and uses 604 pt of height.
+// The general pane scrolls within 604 pt, with its actions pinned below.
 
 enum Style {
     static let windowWidth: CGFloat = 370
@@ -377,21 +377,24 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Spacer().frame(height: 21)
-            speedCard
-            Spacer().frame(height: Style.cardGap)
-            cursorSizeCard
-            Spacer().frame(height: Style.cardGap)
-            activationCard
-            Spacer().frame(height: Style.cardGap)
-            togglesCard
-            Spacer(minLength: 0)
+            ScrollView(.vertical) {
+                VStack(spacing: Style.cardGap) {
+                    header.padding(.bottom, 3)
+                    speedCard
+                    cursorSizeCard
+                    activationCard
+                    togglesCard
+                }
+                .padding(.horizontal, Style.outerPadH)
+                .padding(.top, 17)
+                .padding(.bottom, 18)
+            }
+            .scrollIndicators(.hidden)
             bottomBar
+                .padding(.horizontal, Style.outerPadH)
+                .padding(.top, 12)
+                .padding(.bottom, 20)
         }
-        .padding(.horizontal, Style.outerPadH)
-        .padding(.top, 17)
-        .padding(.bottom, 33)
         .frame(width: Style.windowWidth, height: Style.windowHeight)
         .background(Style.background)
     }
@@ -501,6 +504,43 @@ struct ContentView: View {
                     Slider(value: Binding(get: { skins.cursorScale }, set: { skins.setCursorScale($0) }),
                            in: CursorSizing.range, step: CursorSizing.step)
                         .accessibilityLabel(L10n.t("settings.cursorSize"))
+                        .accessibilityIdentifier("cursor.size")
+                }
+                Divider().padding(.vertical, 3)
+                CheckRow(title: L10n.t("settings.clickMarker"),
+                         isOn: Binding(get: { skins.clickMarkerEnabled }, set: { skins.setClickMarkerEnabled($0) })) {}
+                    .accessibilityRepresentation {
+                        Toggle(L10n.t("settings.clickMarker"),
+                            isOn: Binding(get: { skins.clickMarkerEnabled }, set: { skins.setClickMarkerEnabled($0) }))
+                            .accessibilityIdentifier("cursor.marker.enabled")
+                    }
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(Color(red: 0.94, green: 0.08, blue: 0.12))
+                        .overlay(Circle().strokeBorder(.white, lineWidth: 0.75))
+                        .frame(width: skins.clickMarkerSize, height: skins.clickMarkerSize)
+                        .frame(width: 18)
+                    TickSlider(value: Binding(get: { skins.clickMarkerSize }, set: { skins.setClickMarkerSize($0) }),
+                               range: CursorMarkerSizing.range, step: 1) {}
+                    Text(String(format: "%.0f pt", skins.clickMarkerSize))
+                        .font(.system(size: 11, weight: .semibold)).monospacedDigit()
+                        .foregroundColor(Style.primaryText)
+                        .frame(width: 40, height: 24)
+                        .background(Style.recess, in: RoundedRectangle(cornerRadius: 9))
+                }
+                .disabled(!skins.clickMarkerEnabled)
+                .opacity(skins.clickMarkerEnabled ? 1 : 0.45)
+                .accessibilityRepresentation {
+                    Slider(value: Binding(get: { skins.clickMarkerSize }, set: { skins.setClickMarkerSize($0) }),
+                           in: CursorMarkerSizing.range, step: 1)
+                        .accessibilityLabel(L10n.t("settings.clickMarkerSize"))
+                        .accessibilityIdentifier("cursor.marker.size")
+                        .disabled(!skins.clickMarkerEnabled)
+                }
+                if let error = skins.errorKey {
+                    Text(L10n.t("skins.error.\(error)"))
+                        .font(.system(size: 10)).foregroundColor(.red)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }

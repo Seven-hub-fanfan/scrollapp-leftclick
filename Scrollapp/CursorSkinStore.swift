@@ -14,6 +14,12 @@ final class CursorSkinStore: ObservableObject {
         return saved.isFinite && CursorSizing.range.contains(saved) ? saved : 1
     }()
     @Published private(set) var appliedCursorScale = 1.0
+    @Published private(set) var clickMarkerEnabled = UserDefaults.standard.bool(forKey: "cursorClickMarkerEnabled")
+    @Published private(set) var clickMarkerSize: Double = {
+        let saved = UserDefaults.standard.double(forKey: "cursorClickMarkerSize")
+        return saved.isFinite && CursorMarkerSizing.range.contains(saved) ? saved : CursorMarkerSizing.defaultSize
+    }()
+    @Published private(set) var appliedMarkerDiameter = 0.0
     @Published var section = "general"
 
     private let queue = DispatchQueue(label: "com.scrollapp.cursor-service", qos: .userInitiated)
@@ -35,7 +41,8 @@ final class CursorSkinStore: ObservableObject {
     var activeTheme: CursorTheme { CursorCatalog.theme(activeID) }
     var selectedTheme: CursorTheme { CursorCatalog.theme(selectedID) }
     var isThemed: Bool { activeID != "system" }
-    var hasCustomCursor: Bool { isThemed || appliedCursorScale != 1 }
+    var markerDiameter: Double { clickMarkerEnabled ? clickMarkerSize : 0 }
+    var hasCustomCursor: Bool { isThemed || appliedCursorScale != 1 || appliedMarkerDiameter > 0 }
 
     func start() {
         guard !started else { return }
@@ -84,10 +91,11 @@ final class CursorSkinStore: ObservableObject {
                 DispatchQueue.main.async {
                     self.activeID = "system"
                     self.appliedCursorScale = 1
+                    self.appliedMarkerDiameter = 0
                     self.isReady = true; self.isBusy = false; self.errorKey = nil
                     self.observeSystemChanges()
                     NotificationCenter.default.post(name: .init("ScrollappCursorSkinChanged"), object: nil)
-                    if preferredID != "system" || self.cursorScale != 1 { self.apply(preferredID) }
+                    if preferredID != "system" || self.cursorScale != 1 || self.clickMarkerEnabled { self.apply(preferredID) }
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -102,6 +110,7 @@ final class CursorSkinStore: ObservableObject {
         guard isReady, !isBusy, !shuttingDown else { return }
         let theme = CursorCatalog.theme(id)
         let scale = cursorScale
+        let marker = markerDiameter
         let payload: Data?
         do { payload = theme.id == "system" ? nil : try CursorCatalog.payload(for: theme) }
         catch { errorKey = "invalidPayload"; return }
@@ -116,30 +125,34 @@ final class CursorSkinStore: ObservableObject {
                     try payload.write(to: path, options: .atomic)
                     defer { try? FileManager.default.removeItem(at: path) }
                     response = try self.send(["action": "apply", "path": path.path, "scale": scale,
-                        "pixelated": theme.id == "mint"])
+                        "pixelated": theme.id == "mint", "markerDiameter": marker])
                 } else {
                     response = try self.send(["action": "system", "scale": scale,
-                        "names": CursorCatalog.mapping.keys.sorted()])
+                        "names": CursorCatalog.mapping.keys.sorted(), "markerDiameter": marker])
                 }
                 DispatchQueue.main.async {
                     self.isBusy = false
                     if response["ok"] as? Bool == true {
                         self.activeID = theme.id
                         self.appliedCursorScale = scale
+                        self.appliedMarkerDiameter = marker
                         self.appliedCount = response["applied"] as? Int ?? 0
                         UserDefaults.standard.set(theme.id, forKey: "cursorTheme")
                         UserDefaults.standard.set(scale, forKey: "cursorScale")
+                        self.saveMarkerPreferences()
                         NotificationCenter.default.post(name: .init("ScrollappCursorSkinChanged"), object: nil)
                         self.refreshVisibleCursor()
-                        if self.resizePending || self.cursorScale != scale { self.requestResize() }
+                        if self.resizePending || self.cursorScale != scale || self.markerDiameter != marker { self.requestResize() }
                     } else {
                         self.errorKey = response["error"] as? String ?? "applyFailed"
                         if response["reset"] as? Bool == true {
                             self.activeID = "system"
                             self.appliedCursorScale = 1
+                            self.appliedMarkerDiameter = 0
                             UserDefaults.standard.set("system", forKey: "cursorTheme")
                         }
                         if self.cursorScale == scale { self.cursorScale = self.appliedCursorScale }
+                        if self.markerDiameter == marker { self.restoreAppliedMarker() }
                         self.resizePending = false
                         self.refreshVisibleCursor()
                     }
@@ -149,6 +162,7 @@ final class CursorSkinStore: ObservableObject {
                     self.isBusy = false; self.isReady = false; self.started = false
                     self.errorKey = "serviceUnavailable"
                     self.cursorScale = self.appliedCursorScale
+                    self.restoreAppliedMarker()
                     self.refreshVisibleCursor()
                 }
             }
@@ -165,6 +179,35 @@ final class CursorSkinStore: ObservableObject {
         let clamped = (min(max(value, CursorSizing.range.lowerBound), CursorSizing.range.upperBound) * 10).rounded() / 10
         guard clamped != cursorScale else { return }
         cursorScale = clamped
+        scheduleResize()
+    }
+
+    func setClickMarkerEnabled(_ enabled: Bool) {
+        guard clickMarkerEnabled != enabled else { return }
+        clickMarkerEnabled = enabled
+        scheduleResize()
+    }
+
+    func setClickMarkerSize(_ value: Double) {
+        guard value.isFinite else { return }
+        let size = min(max(value.rounded(), CursorMarkerSizing.range.lowerBound), CursorMarkerSizing.range.upperBound)
+        guard size != clickMarkerSize else { return }
+        clickMarkerSize = size
+        if clickMarkerEnabled { scheduleResize() }
+        else { saveMarkerPreferences() }
+    }
+
+    private func saveMarkerPreferences() {
+        UserDefaults.standard.set(appliedMarkerDiameter > 0, forKey: "cursorClickMarkerEnabled")
+        UserDefaults.standard.set(appliedMarkerDiameter > 0 ? appliedMarkerDiameter : clickMarkerSize, forKey: "cursorClickMarkerSize")
+    }
+
+    private func restoreAppliedMarker() {
+        clickMarkerEnabled = appliedMarkerDiameter > 0
+        if clickMarkerEnabled { clickMarkerSize = appliedMarkerDiameter }
+    }
+
+    private func scheduleResize() {
         // Local feedback is immediate; coalesce the global PNG registration
         // during dragging instead of putting it into the scroll timer.
         refreshVisibleCursor()
@@ -180,7 +223,7 @@ final class CursorSkinStore: ObservableObject {
     }
 
     func activeCursor(role: CursorRole = .arrow) -> NSCursor {
-        CursorCatalog.cursor(activeTheme, role: role, scale: appliedCursorScale)
+        CursorCatalog.cursor(activeTheme, role: role, scale: appliedCursorScale, markerDiameter: appliedMarkerDiameter)
     }
     private func refreshVisibleCursor() {
         guard NSApp.isActive else { return }
@@ -205,14 +248,14 @@ final class CursorSkinStore: ObservableObject {
         }
     }
     private func setVisibleCursor(phase: String) {
-        let cursor = CursorCatalog.cursor(activeTheme, role: .arrow, scale: cursorScale)
+        let cursor = CursorCatalog.cursor(activeTheme, role: .arrow, scale: cursorScale, markerDiameter: markerDiameter)
         cursor.set()
         // Opt-in verification of the actual AppKit current cursor, after an
         // Apply click and before any additional mouse input. No default logging.
         if CommandLine.arguments.contains("--cursor-refresh-log") {
             let current: NSCursor? = NSCursor.current
             let result: [String: Any] = [
-                "phase": phase, "theme": activeID, "scale": cursorScale,
+                "phase": phase, "theme": activeID, "scale": cursorScale, "markerDiameter": markerDiameter,
                 "matchesImage": current?.image === cursor.image ||
                     current?.image.tiffRepresentation == cursor.image.tiffRepresentation,
                 "matchesHotSpot": current?.hotSpot == cursor.hotSpot,
@@ -253,8 +296,8 @@ final class CursorSkinStore: ObservableObject {
     private func scheduleReapply() {
         reapplyWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, self.isThemed else { return }
-            self.apply(self.activeID)
+            guard let self, self.hasCustomCursor else { return }
+            self.requestResize()
         }
         reapplyWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
