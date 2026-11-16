@@ -2,8 +2,7 @@
 //  StyledDialog.swift
 //  Scrollapp
 //
-//  Neumorphic replacement for NSAlert so every dialog matches the redesigned
-//  settings window instead of falling back to the stock blue system alert.
+//  Native first-click-safe dialogs share the settings window's glass palette.
 //
 
 import SwiftUI
@@ -12,6 +11,7 @@ import Cocoa
 // MARK: - View
 
 struct StyledDialogView: View {
+    @AppStorage("interfaceAppearance") private var appearance = AppAppearance.dark.rawValue
     let title: String
     let message: String
     let primaryTitle: String
@@ -53,7 +53,8 @@ struct StyledDialogView: View {
         .padding(.top, 18)
         .padding(.bottom, 18)
         .frame(width: contentWidth + 36)
-        .background(Style.background)
+        .background(GlassBackground())
+        .preferredColorScheme((AppAppearance(rawValue: appearance) ?? .dark).colorScheme)
     }
 }
 
@@ -68,13 +69,12 @@ private struct DialogButton: View {
         ZStack {
             Group {
                 if style == .primary {
-                    RoundedRectangle(cornerRadius: 15, style: .continuous)
-                        .fill(Style.glossyBlack)
-                        .shadow(color: Color.black.opacity(0.25), radius: 5, x: 0, y: 3)
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Style.accent)
                 } else {
-                    RoundedRectangle(cornerRadius: 15, style: .continuous)
-                        .fill(Style.card)
-                        .raised(radius: 15, darkBlur: 6, lightBlur: 5, offset: 3)
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Style.control)
+                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Style.line, lineWidth: 1))
                 }
             }
             // The clickable layer is a real AppKit NSButton: SwiftUI `Button`
@@ -86,7 +86,7 @@ private struct DialogButton: View {
                          action: action)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 32)
+        .frame(height: 36)
     }
 }
 
@@ -98,8 +98,9 @@ private final class FirstMouseButton: NSButton {
 }
 
 /// Thin AppKit button used as the hit-testing / action layer on top of the
-/// neumorphic background. Draws only its title, never a bezel.
+/// glass background. Draws only its title, never a bezel.
 private struct NativeButton: NSViewRepresentable {
+    @Environment(\.colorScheme) private var colorScheme
     let title: String
     let isPrimary: Bool
     let action: () -> Void
@@ -139,8 +140,8 @@ private struct NativeButton: NSViewRepresentable {
             attributes: [
                 .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
                 .foregroundColor: isPrimary
-                    ? NSColor.white
-                    : NSColor(calibratedWhite: 0.18, alpha: 1.0),
+                    ? Style.actionTextNS
+                    : Style.primaryNS,
                 .paragraphStyle: paragraph
             ]
         )
@@ -213,8 +214,7 @@ final class StyledDialog: NSObject, NSWindowDelegate {
         window.title = ""
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.appearance = NSAppearance(named: .aqua)
-        window.backgroundColor = NSColor(calibratedWhite: 0.929, alpha: 1.0)
+        AppAppearance.configure(window)
         // Must stay false: window background dragging makes AppKit grab the
         // mouse-down before the buttons see it (same trap as the speed slider).
         window.isMovableByWindowBackground = false

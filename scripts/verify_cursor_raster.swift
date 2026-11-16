@@ -1,6 +1,7 @@
 // Compile with CursorThemes.swift, Localization.swift and CursorRaster.m,
 // using CursorRaster.h as the Objective-C bridging header. Place the executable
-// in a test .app containing the current Skins resources. No global writes.
+// with -D SCROLLAPP_TESTING. Pass output directory and source Skins directory.
+// Full resources install into isolated test storage. No global writes.
 import AppKit
 
 @main
@@ -55,6 +56,18 @@ struct VerifyCursorRaster {
     static func main() throws {
         _ = NSApplication.shared
         let directory = URL(fileURLWithPath: CommandLine.arguments[1])
+        #if SCROLLAPP_TESTING
+        let sourceDirectory = URL(fileURLWithPath: CommandLine.arguments[2])
+        let skinDirectory = directory.appendingPathComponent("raster-assets")
+        try FileManager.default.createDirectory(at: skinDirectory, withIntermediateDirectories: true)
+        let storage = SkinAssetStore(directory: skinDirectory)
+        for package in SkinPackage.all {
+            let data = try Data(contentsOf: sourceDirectory.appendingPathComponent(package.filename))
+            _ = try SkinPackageValidator.validate(data, package: package)
+            try data.write(to: storage.fileURL(package), options: .atomic)
+        }
+        SkinAssetStore.shared = SkinAssetStore(directory: skinDirectory)
+        #endif
         CursorCatalog.captureSystemImages(from: directory.appendingPathComponent("system-cursors.plist"))
         var results: [[String: Any]] = []
         // Deliberately different low-resolution artwork exposes source switching.

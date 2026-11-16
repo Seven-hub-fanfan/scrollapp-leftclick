@@ -25,6 +25,7 @@ static NSDictionary *journal;
 static NSDictionary *activePlan;
 static NSDictionary *lastRestoration;
 static NSDictionary *installFailure;
+static NSDictionary *nativeBaselineCache;
 static BOOL recoveryRequired;
 static NSString *backupError;
 static NSString *stage = @"startup";
@@ -53,6 +54,8 @@ static BOOL save(id value, NSString *path) {
     return data && [data writeToFile:path options:NSDataWritingAtomic error:nil];
 }
 static NSDictionary *load(NSString *path) {
+    NSNumber *size = [NSFileManager.defaultManager attributesOfItemAtPath:path error:nil][NSFileSize];
+    if (!size || size.unsignedLongLongValue > 32 * 1024 * 1024) return nil;
     NSData *data = [NSData dataWithContentsOfFile:path];
     id value = data ? [NSPropertyListSerialization propertyListWithData:data
         options:NSPropertyListImmutable format:NULL error:nil] : nil;
@@ -62,6 +65,12 @@ static CGImageRef decode(NSData *data) {
     if (![data isKindOfClass:NSData.class]) return NULL;
     CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
     if (!source) return NULL;
+    NSDictionary *properties = CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(source, 0, NULL));
+    NSUInteger w = [properties[(__bridge NSString *)kCGImagePropertyPixelWidth] unsignedIntegerValue];
+    NSUInteger h = [properties[(__bridge NSString *)kCGImagePropertyPixelHeight] unsignedIntegerValue];
+    if (!w || !h || w > 4096 || h > 16384 || w * h > 16777216) {
+        CFRelease(source); return NULL;
+    }
     CGImageRef image = CGImageSourceCreateImageAtIndex(source, 0, NULL);
     CFRelease(source);
     return image;
@@ -104,35 +113,45 @@ static NSArray *imagesFor(NSDictionary *descriptor) {
     }
     return result;
 }
-static NSDictionary *describe(CGSize size, CGPoint spot, NSUInteger frames, CGFloat duration, CFArrayRef images) {
+static NSDictionary *describe(CGSize size, CGPoint spot, NSUInteger frames, CGFloat duration, CFArrayRef images, BOOL includePNGs) {
+    // Journals need lossless PNGs; readback verification needs the same pixel
+    // hashes and metadata only. Avoid repeated PNG compression on slower CPUs.
     NSMutableArray *pngs = [NSMutableArray array], *hashes = [NSMutableArray array];
     for (id value in (__bridge NSArray *)images) {
         CGImageRef image = (__bridge CGImageRef)value;
-        NSData *png = encode(image);
         NSString *hash = pixelHash(image);
-        if (!png || !hash) return nil;
-        [pngs addObject:png]; [hashes addObject:hash];
+        if (!hash) return nil;
+        [hashes addObject:hash];
+        if (includePNGs) {
+            NSData *png = encode(image);
+            if (!png) return nil;
+            [pngs addObject:png];
+        }
     }
     return @{@"PointsWide":@(size.width), @"PointsHigh":@(size.height),
         @"HotSpotX":@(spot.x), @"HotSpotY":@(spot.y), @"FrameCount":@(frames),
         @"FrameDuration":@(duration), @"Representations":pngs, @"PixelHashes":hashes};
 }
-static NSDictionary *readNamed(NSString *name) {
+static NSDictionary *readNamedValue(NSString *name, BOOL includePNGs) {
     CGSize size = CGSizeZero; CGPoint spot = CGPointZero;
     NSUInteger frames = 0; CGFloat duration = 0; CFArrayRef images = NULL;
     CGError error = copyNamed(cid, (char *)name.UTF8String, &size, &spot, &frames, &duration, &images);
-    NSDictionary *result = !error && images ? describe(size, spot, frames, duration, images) : nil;
+    NSDictionary *result = !error && images ? describe(size, spot, frames, duration, images, includePNGs) : nil;
     if (images) CFRelease(images);
     return result;
 }
-static NSDictionary *readCore(int index) {
+static NSDictionary *readNamed(NSString *name) { return readNamedValue(name, YES); }
+static NSDictionary *readNamedMetadata(NSString *name) { return readNamedValue(name, NO); }
+static NSDictionary *readCoreValue(int index, BOOL includePNGs) {
     CGSize size = CGSizeZero; CGPoint spot = CGPointZero;
     NSUInteger frames = 0; CGFloat duration = 0; CFArrayRef images = NULL;
     CGError error = copyCore(cid, index, &images, &size, &spot, &frames, &duration);
-    NSDictionary *result = !error && images ? describe(size, spot, frames, duration, images) : nil;
+    NSDictionary *result = !error && images ? describe(size, spot, frames, duration, images, includePNGs) : nil;
     if (images) CFRelease(images);
     return result;
 }
+static NSDictionary *readCore(int index) { return readCoreValue(index, YES); }
+static NSDictionary *readCoreMetadata(int index) { return readCoreValue(index, NO); }
 static NSDictionary *metadata(NSDictionary *descriptor) {
     NSMutableDictionary *result = descriptor.mutableCopy;
     [result removeObjectForKey:@"Representations"];
@@ -146,7 +165,7 @@ static BOOL matches(NSDictionary *expected, NSDictionary *actual) {
         CGSizeMake([expected[@"PointsWide"] doubleValue], [expected[@"PointsHigh"] doubleValue]),
         CGPointMake([expected[@"HotSpotX"] doubleValue], [expected[@"HotSpotY"] doubleValue]),
         [expected[@"FrameCount"] unsignedIntegerValue], [expected[@"FrameDuration"] doubleValue],
-        (__bridge CFArrayRef)images);
+        (__bridge CFArrayRef)images, NO);
     return normalized && [metadata(normalized) isEqual:metadata(actual)];
 }
 static CGError install(NSString *name, NSDictionary *descriptor, BOOL global) {
@@ -213,6 +232,57 @@ static BOOL validBackup(NSDictionary *value) {
     }
     return YES;
 }
+static NSDictionary *nativeBaselineFrom(NSDictionary *value) {
+    if (!validBackup(value)) return nil;
+    NSMutableDictionary *names = [NSMutableDictionary dictionary];
+    for (NSString *name in knownNames()) {
+        if (![name hasPrefix:@"com.apple.coregraphics."]) continue;
+        NSDictionary *entry = value[@"Names"][name];
+        if (![entry[@"Registered"] boolValue] || !entry[@"Original"]) return nil;
+        names[name] = entry;
+    }
+    return @{@"Version":@1, @"Names":names, @"CoreImages":@{}};
+}
+static NSDictionary *nativeBaseline(void) {
+    if (nativeBaselineCache) return nativeBaselineCache;
+    NSString *directory = [journalPath stringByDeletingLastPathComponent];
+    NSString *path = [directory stringByAppendingPathComponent:@"native-baseline.plist"];
+    NSDictionary *baseline = nativeBaselineFrom(load(path));
+    // Migrate a pre-reset baseline retained by older versions. The first valid
+    // archive predates later skins; unreadable/corrupt archives are skipped.
+    if (!baseline) {
+        NSFileManager *fm = NSFileManager.defaultManager;
+        NSString *archives = [directory stringByAppendingPathComponent:@"recovery-archives"];
+        NSArray *files = [[fm contentsOfDirectoryAtPath:archives error:nil] sortedArrayUsingComparator:
+            ^NSComparisonResult(NSString *a, NSString *b) {
+                NSDate *da = [fm attributesOfItemAtPath:[archives stringByAppendingPathComponent:a] error:nil][NSFileModificationDate];
+                NSDate *db = [fm attributesOfItemAtPath:[archives stringByAppendingPathComponent:b] error:nil][NSFileModificationDate];
+                return [(da ?: NSDate.distantFuture) compare:(db ?: NSDate.distantFuture)];
+            }];
+        for (NSString *file in files) {
+            if (![file.pathExtension isEqual:@"plist"]) continue;
+            NSString *candidate = [archives stringByAppendingPathComponent:file];
+            if (![[fm attributesOfItemAtPath:candidate error:nil][NSFileType] isEqual:NSFileTypeRegular]) continue;
+            baseline = nativeBaselineFrom(load(candidate));
+            if (baseline) break;
+        }
+    }
+    baseline = baseline ?: nativeBaselineFrom(journal);
+    if (!baseline && !journal && !recoveryRequired) {
+        NSMutableDictionary *names = [NSMutableDictionary dictionary];
+        for (NSString *name in knownNames()) {
+            if (![name hasPrefix:@"com.apple.coregraphics."]) continue;
+            NSDictionary *original = readNamed(name);
+            if (original) names[name] = @{@"Registered":@YES, @"Original":original};
+        }
+        baseline = nativeBaselineFrom(@{@"Version":@1, @"Names":names, @"CoreImages":@{}});
+    }
+    // This baseline survives explicit reset. Never replace it with the
+    // live named cache after applying a skin.
+    if (baseline && !save(baseline, path)) return nil;
+    nativeBaselineCache = baseline;
+    return baseline;
+}
 static NSString *archiveBackup(void) {
     NSString *directory = [[journalPath stringByDeletingLastPathComponent]
         stringByAppendingPathComponent:@"recovery-archives"];
@@ -231,16 +301,17 @@ static BOOL clearBackup(void) {
 }
 static void exportSystemImages(void) {
     if (recoveryRequired || journal) return;
-    NSDictionary *sources = @{@"arrow":@[@"com.apple.coregraphics.Arrow", @7],
-        @"text":@[@"com.apple.coregraphics.IBeam", @26], @"link":@[@"", @13],
+    NSDictionary *baseline = nativeBaseline();
+    NSDictionary *sources = @{@"arrow":@[@"com.apple.coregraphics.Arrow"],
+        @"text":@[@"com.apple.coregraphics.IBeam"], @"link":@[@"", @13],
         @"grab":@[@"", @11], @"crosshair":@[@"", @20], @"horizontal":@[@"", @27],
         @"vertical":@[@"", @22], @"diagonalRight":@[@"", @29], @"diagonalLeft":@[@"", @33],
         @"unavailable":@[@"", @3], @"help":@[@"", @13], @"zoomIn":@[@"", @42], @"zoomOut":@[@"", @43]};
     NSMutableDictionary *roles = [NSMutableDictionary dictionary];
     for (NSString *role in sources) {
         NSArray *source = sources[role];
-        NSDictionary *d = [source[0] length] ? readNamed(source[0]) : nil;
-        d = d ?: readCore([source[1] intValue]);
+        NSDictionary *d = [source[0] length] ? baseline[@"Names"][source[0]][@"Original"] :
+            readCore([source[1] intValue]);
         if (d) roles[role] = d;
     }
     save(@{@"Roles":roles}, [[journalPath stringByDeletingLastPathComponent]
@@ -253,8 +324,7 @@ static NSString *validate(NSDictionary *plan) {
     if (plan[@"com.apple.coregraphics.Wait"] || plan[@"com.apple.coregraphics.Empty"] ||
         plan[@"com.apple.cursor.4"] || plan[@"com.apple.cursor.25"]) return @"reservedCursor";
     for (NSString *name in plan) {
-        if (![name isKindOfClass:NSString.class] ||
-            !([name hasPrefix:@"com.apple.coregraphics."] || [name hasPrefix:@"com.apple.cursor."])) return @"invalidName";
+        if (!supportedName(name)) return @"invalidName";
         NSDictionary *d = plan[name];
         if (![d isKindOfClass:NSDictionary.class]) return @"invalidPayload";
         if ([d[@"RestoreOriginal"] isEqual:@YES] && d.count == 1) continue;
@@ -310,7 +380,7 @@ static BOOL preflight(NSDictionary *names) {
         if (!original) continue;
         NSString *temporary = [@"com.scrollapp.preflight." stringByAppendingString:name];
         CGError error = install(temporary, original, NO);
-        BOOL ok = !error && matches(original, readNamed(temporary));
+        BOOL ok = !error && matches(original, readNamedMetadata(temporary));
         removeNamed(cid, (char *)temporary.UTF8String, false);
         if (!ok) return NO;
     }
@@ -324,25 +394,29 @@ static NSDictionary *restore(void) {
     for (NSString *name in names) {
         NSDictionary *entry = names[name];
         CGError error = [entry[@"Registered"] boolValue] ? install(name, entry[@"Original"], YES) :
-            removeNamed(cid, (char *)name.UTF8String, false);
+            removeNamed(cid, (char *)name.UTF8String, true);
         // Removing an already absent registration is harmless; verify below.
         if (error && [entry[@"Registered"] boolValue])
             [failures addObject:@{@"name":name, @"stage":@"installOriginal", @"code":@(error)}];
     }
-    CGError cacheError = unregisterCore(cid);
-    if (cacheError) [failures addObject:@{@"name":@"coreCache", @"stage":@"clearCache", @"code":@(cacheError)}];
-    for (NSString *index in journal[@"CoreImages"]) {
-        if (!matches(journal[@"CoreImages"][index], readCore(index.intValue)))
-            [warnings addObject:[@"core." stringByAppendingString:index]];
-    }
+    // Verify owned registrations before CoreCursorCopyImages warms native
+    // caches. Warming can recreate an originally absent legacy registration.
     for (NSString *name in names) {
         size_t bytes = 0;
         BOOL registered = !namedSize(cid, (char *)name.UTF8String, &bytes) && bytes > 0;
         NSDictionary *entry = names[name];
         if (registered != [entry[@"Registered"] boolValue] ||
-            (registered && !matches(entry[@"Original"], readNamed(name))))
+            (registered && !matches(entry[@"Original"], readNamedMetadata(name))))
             [failures addObject:@{@"name":name, @"stage":@"verifyOriginal",
-                @"expectedRegistered":entry[@"Registered"], @"actualRegistered":@(registered)}];
+                @"expectedRegistered":entry[@"Registered"], @"actualRegistered":@(registered),
+                @"expected":entry[@"Original"] ? metadata(entry[@"Original"]) : @{},
+                @"actual":registered ? (metadata(readNamedMetadata(name)) ?: @{}) : @{}}];
+    }
+    CGError cacheError = unregisterCore(cid);
+    if (cacheError) [failures addObject:@{@"name":@"coreCache", @"stage":@"clearCache", @"code":@(cacheError)}];
+    for (NSString *index in journal[@"CoreImages"]) {
+        if (!matches(journal[@"CoreImages"][index], readCoreMetadata(index.intValue)))
+            [warnings addObject:[@"core." stringByAppendingString:index]];
     }
     if (failures.count) {
         recoveryRequired = YES;
@@ -371,20 +445,26 @@ static NSDictionary *nativeReset(void) {
         archive = archiveBackup();
         if (!archive) return @{@"ok":@NO, @"error":@"backupFailed"};
     }
+    NSDictionary *baseline = nativeBaseline();
+    if (!baseline) return @{@"ok":@NO, @"error":@"backupUnsupported"};
     NSMutableArray *failures = [NSMutableArray array];
-    // The last parameter selects global removal for legacy cursor entries.
-    // Built-in CoreGraphics names regenerate their native fallback immediately
-    // (and may report kCGErrorFailure while doing so); they remain readable.
-    for (NSString *name in knownNames()) removeNamed(cid, (char *)name.UTF8String, true);
+    // CoreGraphics' built-in names cannot be removed (error 1000) and keep the
+    // last skin image. Restore their original pixels instead. Legacy names
+    // can be removed and regenerated by CoreCursor.
+    for (NSString *name in knownNames()) {
+        NSDictionary *original = baseline[@"Names"][name][@"Original"];
+        CGError error = original ? install(name, original, YES) : removeNamed(cid, (char *)name.UTF8String, true);
+        if (original && error) [failures addObject:@{@"name":name, @"stage":@"installNative", @"code":@(error)}];
+    }
     CGError error = unregisterCore(cid);
     if (error) [failures addObject:@{@"name":@"coreCache", @"code":@(error)}];
     for (NSString *name in knownNames()) {
         size_t bytes = 0;
         BOOL registered = !namedSize(cid, (char *)name.UTF8String, &bytes) && bytes > 0;
         if ([name hasPrefix:@"com.apple.coregraphics."]) {
-            NSDictionary *native = registered ? readNamed(name) : nil;
-            if (!native || (activePlan[name] && matches(activePlan[name], native)))
-                [failures addObject:@{@"name":name, @"stage":@"verifyNativeFallback"}];
+            NSDictionary *native = registered ? readNamedMetadata(name) : nil;
+            if (!native || !matches(baseline[@"Names"][name][@"Original"], native))
+                [failures addObject:@{@"name":name, @"stage":@"verifyNativePixels"}];
         } else if (registered)
             [failures addObject:@{@"name":name, @"stage":@"verifyRemoved"}];
     }
@@ -415,7 +495,7 @@ static BOOL installPlan(NSDictionary *plan) {
     for (NSString *name in journal[@"Names"]) {
         if (plan[name]) {
             CGError error = install(name, plan[name], YES);
-            NSDictionary *actual = !error ? readNamed(name) : nil;
+            NSDictionary *actual = !error ? readNamedMetadata(name) : nil;
             if (error || !matches(plan[name], actual)) {
                 installFailure = @{@"name":name, @"code":@(error),
                     @"expected":metadata(plan[name]), @"actual":actual ? metadata(actual) : @{}};
@@ -424,9 +504,11 @@ static BOOL installPlan(NSDictionary *plan) {
         } else {
             NSDictionary *original = journal[@"Names"][name][@"Original"];
             if (original) {
-                if (install(name, original, YES) || !matches(original, readNamed(name))) return NO;
+                if (install(name, original, YES) || !matches(original, readNamedMetadata(name))) return NO;
             } else {
-                removeNamed(cid, (char *)name.UTF8String, false);
+                removeNamed(cid, (char *)name.UTF8String, true);
+                size_t bytes = 0;
+                if (!namedSize(cid, (char *)name.UTF8String, &bytes) && bytes > 0) return NO;
             }
         }
     }
@@ -477,12 +559,10 @@ static NSDictionary *applySystem(NSArray *names, double scale, double markerDiam
         return @{@"ok":@NO, @"error":@"invalidPayload"};
     NSMutableDictionary *keys = [NSMutableDictionary dictionary];
     for (id name in names) {
-        if (![name isKindOfClass:NSString.class] ||
-            !([name hasPrefix:@"com.apple.cursor."] || [name hasPrefix:@"com.apple.coregraphics."]))
-            return @{@"ok":@NO, @"error":@"invalidName"};
         if ([@[@"com.apple.coregraphics.Wait", @"com.apple.coregraphics.Empty",
                @"com.apple.cursor.4", @"com.apple.cursor.25"] containsObject:name])
             return @{@"ok":@NO, @"error":@"reservedCursor"};
+        if (!supportedName(name)) return @{@"ok":@NO, @"error":@"invalidName"};
         keys[name] = @{};
     }
     NSDictionary *backup = ensureBackup(keys);
@@ -546,6 +626,8 @@ int main(int argc, const char *argv[]) {
                 emit(ready);
             }
         } else {
+            // Capture/migrate native originals before any theme can be applied.
+            nativeBaseline();
             exportSystemImages();
             emit(@{@"ok":@YES, @"ready":@YES, @"pid":@(getpid())});
         }
@@ -595,9 +677,9 @@ int main(int argc, const char *argv[]) {
                             @"lastRestoration":lastRestoration ?: @{}});
                     } else if ([action isEqual:@"verify"]) {
                         BOOL ok = activePlan != nil;
-                        for (NSString *name in activePlan) if (!matches(activePlan[name], readNamed(name))) ok = NO;
-                        NSDictionary *arrow = readNamed(@"com.apple.coregraphics.Arrow");
-                        NSDictionary *legacy = readNamed(@"com.apple.cursor.14");
+                        for (NSString *name in activePlan) if (!matches(activePlan[name], readNamedMetadata(name))) ok = NO;
+                        NSDictionary *arrow = readNamedMetadata(@"com.apple.coregraphics.Arrow");
+                        NSDictionary *legacy = readNamedMetadata(@"com.apple.cursor.14");
                         NSMutableDictionary *readback = [NSMutableDictionary dictionary];
                         // Optional read-only diagnostics for integration checks.
                         NSArray *requested = command[@"names"];
@@ -605,7 +687,7 @@ int main(int argc, const char *argv[]) {
                             for (id name in requested) {
                                 if (![name isKindOfClass:NSString.class] ||
                                     !([name hasPrefix:@"com.apple.coregraphics."] || [name hasPrefix:@"com.apple.cursor."])) continue;
-                                NSDictionary *d = readNamed(name);
+                                NSDictionary *d = readNamedMetadata(name);
                                 readback[name] = d ? metadata(d) : @{};
                             }
                         }

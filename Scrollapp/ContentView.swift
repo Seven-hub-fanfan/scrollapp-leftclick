@@ -1,351 +1,83 @@
 import SwiftUI
-
-// MARK: - Design tokens
-//
-// Base control metrics come from the design mock (769×1149 px @2.083x).
-// The general pane scrolls within 604 pt, with its actions pinned below.
-
-enum Style {
-    static let windowWidth: CGFloat = 370
-    static let windowHeight: CGFloat = 604        // general pane, title bar excluded
-
-    static let outerPadH: CGFloat = 16
-    static let cardPadH: CGFloat = 17
-    static let cardRadius: CGFloat = 18
-    static let cardGap: CGFloat = 18
-
-    static let background = Color(red: 0.929, green: 0.929, blue: 0.933)
-    static let card = Color(red: 0.965, green: 0.965, blue: 0.969)
-    static let control = Color.white
-    static let recess = Color(red: 0.914, green: 0.910, blue: 0.914)
-    static let accent = Color(red: 0.075, green: 0.075, blue: 0.082)
-    static let primaryText = Color(red: 0.086, green: 0.086, blue: 0.094)
-    static let secondaryText = Color(red: 0.42, green: 0.42, blue: 0.45)
-    static let tick = Color(red: 0.792, green: 0.792, blue: 0.808)
-
-    // Neumorphic shadow pair: soft dark below-right + white highlight above-left.
-    static let shadowDark = Color.black.opacity(0.085)
-    static let shadowLight = Color.white.opacity(0.95)
-
-    /// Glossy black used for the icon tile and checked checkboxes.
-    static let glossyBlack = LinearGradient(
-        colors: [Color(red: 0.19, green: 0.19, blue: 0.20), Color(red: 0.04, green: 0.04, blue: 0.05)],
-        startPoint: .topLeading, endPoint: .bottomTrailing
-    )
-}
-
-/// Applies the soft-UI double shadow used by every raised surface.
-struct Raised: ViewModifier {
-    var radius: CGFloat
-    var darkBlur: CGFloat
-    var lightBlur: CGFloat
-    var offset: CGFloat
-
-    func body(content: Content) -> some View {
-        content
-            .shadow(color: Style.shadowDark, radius: darkBlur, x: offset, y: offset)
-            .shadow(color: Style.shadowLight, radius: lightBlur, x: -offset, y: -offset)
-    }
-}
-
-extension View {
-    func raised(radius: CGFloat, darkBlur: CGFloat = 6, lightBlur: CGFloat = 5, offset: CGFloat = 3) -> some View {
-        modifier(Raised(radius: radius, darkBlur: darkBlur, lightBlur: lightBlur, offset: offset))
-    }
-}
-
-/// Section container card.
-struct Card<Content: View>: View {
-    var padV: CGFloat = 10
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        content
-            .padding(.horizontal, Style.cardPadH)
-            .padding(.vertical, padV)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: Style.cardRadius, style: .continuous)
-                    .fill(Style.card)
-                    .raised(radius: Style.cardRadius, darkBlur: 7, lightBlur: 6, offset: 3)
-            )
-    }
-}
-
-struct CardLabel: View {
-    let text: String
-    var body: some View {
-        Text(text)
-            .font(.system(size: 12, weight: .bold))
-            .foregroundColor(Style.primaryText)
-    }
-}
-
-// MARK: - App icon (white plinth + glossy black tile)
-
-struct AppIconTile: View {
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                .fill(Style.control)
-                .frame(width: 46, height: 46)
-                .raised(radius: 15, darkBlur: 7, lightBlur: 6, offset: 3)
-
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(Style.glossyBlack)
-                .frame(width: 36, height: 36)
-                .shadow(color: Color.black.opacity(0.28), radius: 4, x: 0, y: 2)
-                .overlay(
-                    Image(systemName: "arrow.up.and.down")
-                        .font(.system(size: 17, weight: .bold))
-                        .foregroundColor(.white)
-                        .shadow(color: Color.black.opacity(0.35), radius: 1, x: 0, y: 1)
-                )
-        }
-        .frame(width: 46, height: 46)
-    }
-}
-
-// MARK: - Speed gauge
-
-private struct SpeedGauge: View {
-    let value: Double
-    let range: ClosedRange<Double>
-
-    private var progress: Double {
-        let clamped = min(max(value, range.lowerBound), range.upperBound)
-        return (clamped - range.lowerBound) / (range.upperBound - range.lowerBound)
-    }
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(Style.control)
-                .raised(radius: 25, darkBlur: 6, lightBlur: 5, offset: 2.5)
-
-            Circle()
-                .trim(from: 0, to: 0.78)
-                .stroke(Style.tick.opacity(0.55), style: StrokeStyle(lineWidth: 5.5, lineCap: .round))
-                .rotationEffect(.degrees(131))
-                .padding(4.5)
-
-            Circle()
-                .trim(from: 0, to: 0.78 * progress)
-                .stroke(Style.accent, style: StrokeStyle(lineWidth: 5.5, lineCap: .round))
-                .rotationEffect(.degrees(131))
-                .padding(4.5)
-
-            VStack(spacing: -1) {
-                HStack(alignment: .firstTextBaseline, spacing: 0) {
-                    Text(String(format: "%.1f", value))
-                        .font(.system(size: 14, weight: .bold))
-                    Text("x")
-                        .font(.system(size: 9.5, weight: .bold))
-                }
-                .foregroundColor(Style.primaryText)
-
-                Text(L10n.t("settings.scrollSpeed"))
-                    .font(.system(size: 6, weight: .semibold))
-                    .foregroundColor(Style.secondaryText)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-            }
-            .padding(.horizontal, 8)
-        }
-        .frame(width: 50, height: 50)
-    }
-}
-
-// MARK: - Ruler slider
-
-private struct TickSlider: View {
-    @Binding var value: Double
-    let range: ClosedRange<Double>
-    let step: Double
-    let onChange: () -> Void
-
-    private let trackHeight: CGFloat = 24
-    private let knobWidth: CGFloat = 13
-    private let knobHeight: CGFloat = 22
-    private let tickCount = 38
-
-    var body: some View {
-        GeometryReader { geo in
-            let usable = max(geo.size.width - knobWidth, 1)
-            let fraction = (min(max(value, range.lowerBound), range.upperBound) - range.lowerBound)
-                / (range.upperBound - range.lowerBound)
-
-            ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: trackHeight / 2, style: .continuous)
-                    .fill(Style.recess)
-
-                // Ruler: hairline baseline with short ticks rising from it.
-                VStack(spacing: 0) {
-                    HStack(alignment: .bottom, spacing: 0) {
-                        ForEach(0..<tickCount, id: \.self) { index in
-                            Rectangle()
-                                .fill(Style.tick.opacity(0.9))
-                                .frame(width: 1, height: index % 5 == 0 ? 6.5 : 4.5)
-                                .frame(maxWidth: .infinity)
-                        }
-                    }
-                    Rectangle()
-                        .fill(Style.tick.opacity(0.85))
-                        .frame(height: 1)
-                }
-                .frame(height: 6.5)
-                .padding(.horizontal, 11)
-
-                Capsule()
-                    .fill(Style.glossyBlack)
-                    .frame(width: knobWidth, height: knobHeight)
-                    .shadow(color: Color.black.opacity(0.28), radius: 3, x: 0, y: 2)
-                    .offset(x: usable * fraction)
-            }
-            .frame(height: trackHeight)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { drag in update(x: drag.location.x - knobWidth / 2, usable: usable) }
-            )
-        }
-        .frame(height: trackHeight)
-    }
-
-    private func update(x: CGFloat, usable: CGFloat) {
-        let fraction = Double(min(max(x / usable, 0), 1))
-        let raw = range.lowerBound + fraction * (range.upperBound - range.lowerBound)
-        let stepped = (raw / step).rounded() * step
-        let clamped = min(max(stepped, range.lowerBound), range.upperBound)
-        if abs(clamped - value) > 0.0001 {
-            value = clamped
-            onChange()
-        }
-    }
-}
-
-// MARK: - Checkbox row
+import AppKit
 
 private struct CheckRow: View {
     let title: String
     @Binding var isOn: Bool
+    var tint: Color = Style.accent
+    var activeThumb: Color = Style.actionText
     let onChange: () -> Void
-
     var body: some View {
         Button {
             isOn.toggle()
             onChange()
         } label: {
-            HStack(spacing: 15) {
-                ZStack {
-                    if isOn {
-                        RoundedRectangle(cornerRadius: 7.5, style: .continuous)
-                            .fill(Style.glossyBlack)
-                            .raised(radius: 7.5, darkBlur: 5, lightBlur: 4, offset: 2.5)
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 10.5, weight: .heavy))
-                            .foregroundColor(.white)
-                    } else {
-                        RoundedRectangle(cornerRadius: 7.5, style: .continuous)
-                            .fill(Style.control)
-                            .raised(radius: 7.5, darkBlur: 5, lightBlur: 4, offset: 2.5)
-                    }
-                }
-                .frame(width: 23, height: 23)
-
-                Text(title)
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundColor(Style.primaryText)
+            HStack(spacing: 12) {
+                Text(title).font(.system(size: 11.5)).foregroundStyle(Style.primaryText)
                     .fixedSize(horizontal: false, vertical: true)
-
-                Spacer(minLength: 0)
+                Spacer(minLength: 8)
+                Capsule().fill(isOn ? tint : Style.control)
+                    .overlay(Capsule().strokeBorder(Style.line, lineWidth: 1))
+                    .overlay(alignment: isOn ? .trailing : .leading) {
+                        Circle().fill(isOn ? activeThumb : Style.secondaryText)
+                            .frame(width: 12, height: 12).padding(3)
+                    }
+                    .frame(width: 30, height: 18)
             }
+            .frame(minHeight: 24)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-}
-
-// MARK: - Bottom pill button
-
-private struct PillButton: View {
-    let title: String
-    let systemImage: String
-    let filledIcon: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: systemImage)
-                    .font(.system(size: filledIcon ? 13 : 12, weight: .bold))
-                    .foregroundColor(Style.primaryText)
-                Text(title)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(Style.primaryText)
-            }
-            .frame(width: 95, height: 32)
-            .background(
-                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                    .fill(Style.card)
-                    .raised(radius: 15, darkBlur: 6, lightBlur: 5, offset: 3)
-            )
-            .contentShape(Rectangle())
+        .accessibilityRepresentation {
+            Toggle(title, isOn: Binding(get: { isOn }, set: { isOn = $0; onChange() }))
         }
-        .buttonStyle(.plain)
     }
 }
 
-// MARK: - NSMenu-backed dropdown
-
-/// Invisible click target that pops a native NSMenu, letting us keep a fully
-/// custom-styled dropdown row (SwiftUI's Menu label styling is unreliable on macOS).
+/// Native menus preserve keyboard navigation and the persisted English IDs.
 private struct MenuTrigger: NSViewRepresentable {
     let items: [(title: String, value: String)]
     let selected: String
     let onSelect: (String) -> Void
-
     func makeNSView(context: Context) -> TriggerView {
         let view = TriggerView()
         view.configure(items: items, selected: selected, onSelect: onSelect)
         return view
     }
-
     func updateNSView(_ view: TriggerView, context: Context) {
         view.configure(items: items, selected: selected, onSelect: onSelect)
     }
-
     final class TriggerView: NSView {
         private var items: [(title: String, value: String)] = []
-        private var selected: String = ""
+        private var selected = ""
         private var onSelect: ((String) -> Void)?
-
-        func configure(items: [(title: String, value: String)], selected: String, onSelect: @escaping (String) -> Void) {
-            self.items = items
-            self.selected = selected
-            self.onSelect = onSelect
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        func configure(items: [(title: String, value: String)], selected: String,
+                       onSelect: @escaping (String) -> Void) {
+            self.items = items; self.selected = selected; self.onSelect = onSelect
+            setAccessibilityElement(true)
+            setAccessibilityRole(.popUpButton)
+            setAccessibilityLabel(L10n.t("settings.activationMethod"))
+            setAccessibilityValue(items.first { $0.value == selected }?.title ?? "")
         }
-
-        override func mouseDown(with event: NSEvent) {
+        override func mouseDown(with event: NSEvent) { showMenu() }
+        override func accessibilityPerformPress() -> Bool { showMenu(); return true }
+        private func showMenu() {
             let menu = NSMenu()
             for (index, item) in items.enumerated() {
                 let menuItem = NSMenuItem(title: item.title, action: #selector(pick(_:)), keyEquivalent: "")
-                menuItem.target = self
-                menuItem.tag = index
-                menuItem.state = (item.value == selected) ? .on : .off
+                menuItem.target = self; menuItem.tag = index
+                menuItem.state = item.value == selected ? .on : .off
                 menu.addItem(menuItem)
             }
             menu.popUp(positioning: nil, at: NSPoint(x: 0, y: bounds.height + 4), in: self)
         }
-
         @objc private func pick(_ sender: NSMenuItem) {
             guard items.indices.contains(sender.tag) else { return }
             onSelect?(items[sender.tag].value)
         }
     }
 }
-
-// MARK: - Main view
 
 struct ContentView: View {
     @ObservedObject private var skins = CursorSkinStore.shared
@@ -354,10 +86,7 @@ struct ContentView: View {
     @AppStorage("leftClickDoesNotInterrupt") private var leftClickNoInterrupt = false
     @AppStorage("rightClickDoesNotInterrupt") private var rightClickNoInterrupt = false
     @AppStorage("launchAtLogin") private var launchAtLogin = false
-    @AppStorage("activationMethod") private var activationMethod = "Middle Click"
-
-    /// Raw (English) values are the persisted identifiers shared with
-    /// AppDelegate.ActivationMethod; only the label shown to the user is localized.
+    @AppStorage("activationMethod") private var activationMethod = "Double Middle Click"
     private let activationMethods: [(raw: String, key: String)] = [
         ("Middle Click", "activation.middleClick"),
         ("Shift + Middle Click", "activation.shiftMiddleClick"),
@@ -367,215 +96,202 @@ struct ContentView: View {
         ("Mouse Button 5", "activation.button5"),
         ("Double Middle Click", "activation.doubleMiddleClick")
     ]
-
     private let speedRange: ClosedRange<Double> = 0.2...3.0
-
     private var currentActivationLabel: String {
-        let key = activationMethods.first { $0.raw == activationMethod }?.key ?? "activation.middleClick"
-        return L10n.t(key)
+        L10n.t(activationMethods.first { $0.raw == activationMethod }?.key ?? "activation.doubleMiddleClick")
     }
-
     var body: some View {
         VStack(spacing: 0) {
             ScrollView(.vertical) {
-                VStack(spacing: Style.cardGap) {
-                    header.padding(.bottom, 3)
-                    speedCard
-                    cursorSizeCard
+                VStack(alignment: .leading, spacing: 10) {
+                    PageHeading(title: L10n.t("settings.general"), subtitle: L10n.t("settings.generalIntro"))
+                    gaugesCard
+                    adjustmentCard
                     activationCard
                     togglesCard
                 }
-                .padding(.horizontal, Style.outerPadH)
-                .padding(.top, 17)
-                .padding(.bottom, 18)
+                .padding(.horizontal, Style.outerPadH).padding(.top, 38).padding(.bottom, 12)
             }
-            .scrollIndicators(.hidden)
+            .scrollIndicators(.visible)
             bottomBar
-                .padding(.horizontal, Style.outerPadH)
-                .padding(.top, 12)
-                .padding(.bottom, 20)
         }
-        .frame(width: Style.windowWidth, height: Style.windowHeight)
-        .background(Style.background)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // Centred icon + title, with the speed gauge pinned to the trailing edge.
-    private var header: some View {
-        ZStack(alignment: .top) {
-            VStack(spacing: 7) {
-                AppIconTile()
-                Text(L10n.t("settings.appName"))
-                    .font(.system(size: 18, weight: .heavy))
-                    .foregroundColor(Style.primaryText)
-            }
-            .padding(.top, 4)
-
-            HStack {
-                Spacer()
-                SpeedGauge(value: sensitivity, range: speedRange)
-                    .padding(.trailing, 8)
+    private var gaugesCard: some View {
+        Card(padV: 8) {
+            HStack(spacing: 0) {
+                gaugeColumn(title: L10n.t("settings.scrollSpeed"), value: sensitivity,
+                            range: speedRange, step: 0.1, unit: "×")
+                Rectangle().fill(Style.line).frame(width: 1, height: 64)
+                gaugeColumn(title: L10n.t("settings.cursorSize"), value: skins.cursorScale,
+                            range: CursorSizing.range, step: CursorSizing.step, unit: "×")
+                    .opacity(skins.needsRecovery ? 0.38 : 1)
+                Rectangle().fill(Style.line).frame(width: 1, height: 64)
+                gaugeColumn(title: L10n.t("settings.clickMarkerSize"), value: skins.clickMarkerSize,
+                            range: CursorMarkerSizing.range, step: 1, unit: "pt")
+                    .opacity(skins.needsRecovery || !skins.clickMarkerEnabled ? 0.38 : 1)
             }
         }
+        .allowsHitTesting(false).accessibilityHidden(true)
     }
 
-    private var speedCard: some View {
-        Card(padV: 11) {
-            VStack(alignment: .leading, spacing: 9) {
-                CardLabel(text: L10n.t("settings.scrollSpeed"))
+    private func gaugeColumn(title: String, value: Double, range: ClosedRange<Double>,
+                             step: Double, unit: String) -> some View {
+        VStack(spacing: 6) {
+            CircularSliderGauge(value: value, range: range, step: step, unit: unit)
+            Text(title).font(.system(size: 11.5, weight: .medium)).foregroundStyle(Style.secondaryText)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity)
+    }
 
-                HStack(spacing: 6) {
-                    TickSlider(value: $sensitivity, range: speedRange, step: 0.1) {
-                        NotificationCenter.default.post(name: NSNotification.Name("ScrollappSensitivityChanged"), object: nil)
+    private var adjustmentCard: some View {
+        Card(padV: 12) {
+            VStack(spacing: 14) {
+                HStack(alignment: .top, spacing: 0) {
+                    adjustmentColumn(title: L10n.t("settings.scrollSpeed"),
+                                     value: $sensitivity, range: speedRange, step: 0.1,
+                                     unit: "×", markers: [0.2, 1, 2, 3], identifier: "scroll.speed") {
+                        notify("ScrollappSensitivityChanged")
                     }
-
-                    Text(String(format: "%.1fx", sensitivity))
-                        .font(.system(size: 12, weight: .semibold))
-                        .monospacedDigit()
-                        .foregroundColor(Style.primaryText)
-                        .frame(width: 40, height: 24)
-                        .background(
-                            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .fill(Style.recess)
-                        )
+                    columnDivider
+                    adjustmentColumn(title: L10n.t("settings.cursorSize"),
+                                     value: Binding(get: { skins.cursorScale },
+                                                    set: { skins.setCursorScale($0) }),
+                                     range: CursorSizing.range, step: CursorSizing.step,
+                                     unit: "×", markers: [0.5, 2, 4, 6, 8], identifier: "cursor.size") {}
+                        .disabled(skins.needsRecovery).opacity(skins.needsRecovery ? 0.38 : 1)
+                    columnDivider
+                    adjustmentColumn(title: L10n.t("settings.clickMarkerSize"),
+                                     value: Binding(get: { skins.clickMarkerSize },
+                                                    set: { skins.setClickMarkerSize($0) }),
+                                     range: CursorMarkerSizing.range, step: 1,
+                                     unit: "pt", markers: [3, 6, 9, 12, 16], identifier: "cursor.marker.size") {}
+                        .disabled(skins.needsRecovery || !skins.clickMarkerEnabled)
+                        .opacity(skins.needsRecovery || !skins.clickMarkerEnabled ? 0.38 : 1)
+                }
+                if let error = skins.errorKey {
+                    Text(L10n.t("skins.error.\(error)")).font(.system(size: 10)).foregroundStyle(Style.error)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
+    }
+
+    private var columnDivider: some View {
+        Rectangle().fill(Style.line).frame(width: 1, height: 144)
+    }
+
+    private func adjustmentColumn(title: String, value: Binding<Double>, range: ClosedRange<Double>,
+                                  step: Double, unit: String, markers: [Double], identifier: String,
+                                  onChange: @escaping () -> Void) -> some View {
+        VStack(spacing: 0) {
+            ZStack {
+                ChannelReadout(value: value.wrappedValue, range: range, step: step,
+                               unit: unit, markers: markers)
+                VerticalChannelSlider(value: value, range: range, step: step, label: title,
+                                      unit: unit, onChange: onChange)
+                    .accessibilityIdentifier(identifier)
+            }
+            .frame(width: ChannelReadout.width, height: VerticalChannelSlider.height)
+            Text(String(format: step >= 1 ? "%.0f–%.0f %@" : "%.1f–%.1f%@", range.lowerBound, range.upperBound, unit))
+                .font(.system(size: 9)).monospacedDigit().foregroundStyle(Style.secondaryText)
+                .padding(.top, 10)
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private var activationCard: some View {
-        Card(padV: 8) {
-            VStack(alignment: .leading, spacing: 9) {
+        Card(padV: 12) {
+            HStack(spacing: 20) {
+              HStack(spacing: 14) {
                 CardLabel(text: L10n.t("settings.activationMethod"))
-
                 ZStack {
-                    HStack(spacing: 0) {
-                        Text(currentActivationLabel)
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundColor(Style.primaryText)
+                    HStack {
+                        Text(currentActivationLabel).font(.system(size: 11.5, weight: .medium))
                         Spacer(minLength: 4)
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Style.glossyBlack)
-                            .frame(width: 24, height: 24)
-                            .shadow(color: Color.black.opacity(0.25), radius: 3, x: 0, y: 2)
-                            .overlay(
-                                Image(systemName: "chevron.down")
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundColor(.white)
-                            )
+                        Image(systemName: "chevron.down").font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(Style.secondaryText)
                     }
-                    .padding(.leading, 13)
-                    .padding(.trailing, 4)
-                    .frame(height: 30)
-                    .background(
-                        RoundedRectangle(cornerRadius: 15, style: .continuous)
-                            .fill(Style.control)
-                            .raised(radius: 16, darkBlur: 5, lightBlur: 4, offset: 2.5)
-                    )
-
-                    // Transparent AppKit overlay: SwiftUI's Menu styles discard the
-                    // custom label on macOS, so drive a real NSMenu instead.
-                    MenuTrigger(
-                        items: activationMethods.map { (title: L10n.t($0.key), value: $0.raw) },
-                        selected: activationMethod
-                    ) { raw in
+                    .padding(.horizontal, 10).frame(height: 28)
+                    .background(Style.recess, in: RoundedRectangle(cornerRadius: 6))
+                    .accessibilityHidden(true)
+                    MenuTrigger(items: activationMethods.map { (L10n.t($0.key), $0.raw) },
+                                selected: activationMethod) { raw in
                         activationMethod = raw
-                        NotificationCenter.default.post(name: NSNotification.Name("ScrollappActivationChanged"), object: nil)
+                        notify("ScrollappActivationChanged")
                     }
-                    .frame(height: 30)
+                    .frame(height: 28)
                 }
+                .frame(maxWidth: .infinity)
+                .help(L10n.t("settings.activationIntro"))
+              }
+              .frame(maxWidth: .infinity)
+                Rectangle().fill(Style.line).frame(width: 1, height: 24)
+                HStack(spacing: 9) {
+                    Circle().fill(Color(red: 0.94, green: 0.08, blue: 0.12))
+                        .frame(width: 6, height: 6).accessibilityHidden(true)
+                    CheckRow(title: L10n.t("settings.clickMarker"),
+                             isOn: Binding(get: { skins.clickMarkerEnabled },
+                                           set: { skins.setClickMarkerEnabled($0) }),
+                             tint: Style.danger, activeThumb: .white) {}
+                        .accessibilityIdentifier("cursor.marker.enabled")
+                }
+                .frame(maxWidth: .infinity).disabled(skins.needsRecovery).opacity(skins.needsRecovery ? 0.38 : 1)
             }
-        }
-    }
-
-    private var cursorSizeCard: some View {
-        Card(padV: 11) {
-            VStack(alignment: .leading, spacing: 9) {
-                CardLabel(text: L10n.t("settings.cursorSize"))
-                HStack(spacing: 6) {
-                    TickSlider(value: Binding(get: { skins.cursorScale }, set: { skins.setCursorScale($0) }),
-                               range: CursorSizing.range, step: CursorSizing.step) {}
-                    Text(String(format: "%.1fx", skins.cursorScale))
-                        .font(.system(size: 12, weight: .semibold)).monospacedDigit()
-                        .foregroundColor(Style.primaryText)
-                        .frame(width: 40, height: 24)
-                        .background(Style.recess, in: RoundedRectangle(cornerRadius: 9))
-                }
-                .accessibilityRepresentation {
-                    Slider(value: Binding(get: { skins.cursorScale }, set: { skins.setCursorScale($0) }),
-                           in: CursorSizing.range, step: CursorSizing.step)
-                        .accessibilityLabel(L10n.t("settings.cursorSize"))
-                        .accessibilityIdentifier("cursor.size")
-                }
-                Divider().padding(.vertical, 3)
-                CheckRow(title: L10n.t("settings.clickMarker"),
-                         isOn: Binding(get: { skins.clickMarkerEnabled }, set: { skins.setClickMarkerEnabled($0) })) {}
-                    .accessibilityRepresentation {
-                        Toggle(L10n.t("settings.clickMarker"),
-                            isOn: Binding(get: { skins.clickMarkerEnabled }, set: { skins.setClickMarkerEnabled($0) }))
-                            .accessibilityIdentifier("cursor.marker.enabled")
-                    }
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(Color(red: 0.94, green: 0.08, blue: 0.12))
-                        .overlay(Circle().strokeBorder(.white, lineWidth: 0.75))
-                        .frame(width: skins.clickMarkerSize, height: skins.clickMarkerSize)
-                        .frame(width: 18)
-                    TickSlider(value: Binding(get: { skins.clickMarkerSize }, set: { skins.setClickMarkerSize($0) }),
-                               range: CursorMarkerSizing.range, step: 1) {}
-                    Text(String(format: "%.0f pt", skins.clickMarkerSize))
-                        .font(.system(size: 11, weight: .semibold)).monospacedDigit()
-                        .foregroundColor(Style.primaryText)
-                        .frame(width: 40, height: 24)
-                        .background(Style.recess, in: RoundedRectangle(cornerRadius: 9))
-                }
-                .disabled(!skins.clickMarkerEnabled)
-                .opacity(skins.clickMarkerEnabled ? 1 : 0.45)
-                .accessibilityRepresentation {
-                    Slider(value: Binding(get: { skins.clickMarkerSize }, set: { skins.setClickMarkerSize($0) }),
-                           in: CursorMarkerSizing.range, step: 1)
-                        .accessibilityLabel(L10n.t("settings.clickMarkerSize"))
-                        .accessibilityIdentifier("cursor.marker.size")
-                        .disabled(!skins.clickMarkerEnabled)
-                }
-                if let error = skins.errorKey {
-                    Text(L10n.t("skins.error.\(error)"))
-                        .font(.system(size: 10)).foregroundColor(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .disabled(skins.needsRecovery)
         }
     }
 
     private var togglesCard: some View {
-        Card(padV: 10) {
-            VStack(alignment: .leading, spacing: 10) {
-                CheckRow(title: L10n.t("settings.invertDirection"), isOn: $invertScroll) {
-                    NotificationCenter.default.post(name: NSNotification.Name("ScrollappInvertChanged"), object: nil)
-                }
-                CheckRow(title: L10n.t("settings.leftClickNoInterrupt"), isOn: $leftClickNoInterrupt) {
-                    NotificationCenter.default.post(name: NSNotification.Name("ScrollappLeftClickChanged"), object: nil)
-                }
-                CheckRow(title: L10n.t("settings.rightClickNoInterrupt"), isOn: $rightClickNoInterrupt) {
-                    NotificationCenter.default.post(name: NSNotification.Name("ScrollappRightClickChanged"), object: nil)
-                }
-                CheckRow(title: L10n.t("settings.launchAtLogin"), isOn: $launchAtLogin) {
-                    NotificationCenter.default.post(name: NSNotification.Name("ScrollappLaunchChanged"), object: nil)
+        Card(padV: 12) {
+            VStack(alignment: .leading, spacing: 13) {
+                CardLabel(text: L10n.t("settings.behavior"))
+                HStack(alignment: .top, spacing: 22) {
+                    VStack(spacing: 13) {
+                        CheckRow(title: L10n.t("settings.invertDirection"), isOn: $invertScroll) {
+                            notify("ScrollappInvertChanged")
+                        }
+                        CheckRow(title: L10n.t("settings.launchAtLogin"), isOn: $launchAtLogin) {
+                            notify("ScrollappLaunchChanged")
+                        }
+                    }
+                    Rectangle().fill(Style.line).frame(width: 1, height: 61)
+                    VStack(spacing: 13) {
+                        CheckRow(title: L10n.t("settings.leftClickNoInterrupt"), isOn: $leftClickNoInterrupt) {
+                            notify("ScrollappLeftClickChanged")
+                        }
+                        CheckRow(title: L10n.t("settings.rightClickNoInterrupt"), isOn: $rightClickNoInterrupt) {
+                            notify("ScrollappRightClickChanged")
+                        }
+                    }
                 }
             }
         }
     }
 
     private var bottomBar: some View {
-        HStack(spacing: 0) {
-            PillButton(title: L10n.t("settings.about"), systemImage: "info.circle.fill", filledIcon: true) {
-                AboutPanelController.shared.show(body: L10n.t("about.bodySettings"))
+        VStack(spacing: 0) {
+            Rectangle().fill(Style.line).frame(height: 1)
+            HStack(spacing: 12) {
+                Text("Scrollapp").font(.system(size: 10, weight: .medium))
+                Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")
+                    .font(.system(size: 10)).foregroundStyle(Style.secondaryText)
+                Spacer()
+                Button { AboutPanelController.shared.show(body: L10n.t("about.bodySettings")) } label: {
+                    Label(L10n.t("settings.about"), systemImage: "info.circle")
+                }
+                .buttonStyle(GlassButtonStyle(kind: .quiet))
+                Button { NSApplication.shared.terminate(nil) } label: {
+                    Label(L10n.t("settings.quit"), systemImage: "rectangle.portrait.and.arrow.right")
+                }
+                .buttonStyle(GlassButtonStyle())
             }
-            Spacer(minLength: 0)
-            PillButton(title: L10n.t("settings.quit"), systemImage: "rectangle.portrait.and.arrow.right", filledIcon: false) {
-                NSApplication.shared.terminate(nil)
-            }
+            .padding(.horizontal, Style.outerPadH).padding(.vertical, 16)
         }
-        .padding(.horizontal, 3)
+    }
+    private func notify(_ name: String) {
+        NotificationCenter.default.post(name: NSNotification.Name(name), object: nil)
     }
 }

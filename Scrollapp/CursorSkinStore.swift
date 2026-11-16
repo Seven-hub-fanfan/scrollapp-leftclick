@@ -1,5 +1,7 @@
 import AppKit
 import SwiftUI
+import ApplicationServices
+import Darwin
 
 final class CursorSkinStore: ObservableObject {
     static let shared = CursorSkinStore()
@@ -10,7 +12,9 @@ final class CursorSkinStore: ObservableObject {
     @Published private(set) var errorKey: String?
     @Published private(set) var needsRecovery = false
     @Published private(set) var diagnosticError = false
+    @Published private(set) var missingDownload = false
     @Published private(set) var appliedCount = 0
+    @Published private(set) var didRestoreNative = false
     @Published private(set) var cursorScale: Double = {
         let saved = UserDefaults.standard.double(forKey: "cursorScale")
         return saved.isFinite && CursorSizing.range.contains(saved) ? saved : 1
@@ -38,8 +42,12 @@ final class CursorSkinStore: ObservableObject {
     private var resizePending = false
     private var refreshGeneration = 0
     private var lastServiceResponse: [String: Any] = [:]
-    private let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("Scrollapp/Cursors", isDirectory: true)
+    private let directory: URL
+
+    init(directory: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("Scrollapp/Cursors", isDirectory: true)) {
+        self.directory = directory
+    }
 
     var activeTheme: CursorTheme { CursorCatalog.theme(activeID) }
     var selectedTheme: CursorTheme { CursorCatalog.theme(selectedID) }
@@ -50,12 +58,32 @@ final class CursorSkinStore: ObservableObject {
     func start() {
         guard !started else { return }
         started = true; isBusy = true; errorKey = nil
+        let assetStore = SkinAssetStore.shared
+        let assetDirectory = assetStore.directory
+        let sourceIDs = assetStore.installed.filter { FeaturedSkin.find($0) != nil }
+        assetStore.prepareRoles = { id, base in
+            if FeaturedSkin.find(id) != nil {
+                _ = try SupplementedCursors.resolve(id, base: base, directory: assetDirectory)
+            }
+        }
+        SkinAssetStore.shared.didChange = { id in
+            CursorCatalog.invalidate(id)
+            NotificationCenter.default.post(name: .init("ScrollappCursorSkinChanged"), object: nil)
+        }
         selectedID = CursorCatalog.theme(selectedID).id
         let savedID = UserDefaults.standard.string(forKey: "cursorTheme") ?? "system"
         let preferredID = CursorCatalog.theme(savedID).id
         if preferredID != savedID { UserDefaults.standard.set(preferredID, forKey: "cursorTheme") }
         queue.async {
             do {
+                // Prepare role artwork off the UI thread before the cursor
+                // service becomes ready or applies a remembered source skin.
+                for id in sourceIDs {
+                    if let base = try? assetStore.validatedRoles(id) {
+                        _ = try? SupplementedCursors.resolve(id, base: base, directory: assetStore.directory)
+                    }
+                }
+                self.disconnect()
                 try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
                 try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: self.directory.path)
                 guard let executable = Bundle.main.url(forAuxiliaryExecutable: "CursorService") else {
@@ -105,9 +133,16 @@ final class CursorSkinStore: ObservableObject {
                     self.isReady = true; self.isBusy = false; self.errorKey = nil
                     self.observeSystemChanges()
                     NotificationCenter.default.post(name: .init("ScrollappCursorSkinChanged"), object: nil)
-                    if preferredID != "system" || self.cursorScale != 1 || self.clickMarkerEnabled { self.apply(preferredID) }
+                    if !SkinAssetStore.shared.isInstalled(preferredID) {
+                        self.missingDownload = true
+                        self.section = "skins"
+                        if self.cursorScale != 1 || self.clickMarkerEnabled { self.apply("system") }
+                    } else if preferredID != "system" || self.cursorScale != 1 || self.clickMarkerEnabled {
+                        self.apply(preferredID)
+                    }
                 }
             } catch {
+                self.disconnect()
                 DispatchQueue.main.async {
                     self.started = false; self.isReady = false; self.isBusy = false
                     self.errorKey = (error as? ServiceError)?.code ?? "serviceUnavailable"
@@ -119,6 +154,7 @@ final class CursorSkinStore: ObservableObject {
     func apply(_ id: String) {
         guard isReady, !needsRecovery, !isBusy, !shuttingDown else { return }
         let theme = CursorCatalog.theme(id)
+        guard SkinAssetStore.shared.isInstalled(theme.id) else { errorKey = "downloadRequired"; return }
         let scale = cursorScale
         let marker = markerDiameter
         let payload: Data?
@@ -135,7 +171,7 @@ final class CursorSkinStore: ObservableObject {
                     try payload.write(to: path, options: .atomic)
                     defer { try? FileManager.default.removeItem(at: path) }
                     response = try self.send(["action": "apply", "path": path.path, "scale": scale,
-                        "pixelated": theme.id == "mint", "markerDiameter": marker])
+                        "pixelated": theme.isPixelated, "markerDiameter": marker])
                 } else {
                     response = try self.send(["action": "system", "scale": scale,
                         "names": CursorCatalog.mapping.keys.sorted(), "markerDiameter": marker])
@@ -146,6 +182,8 @@ final class CursorSkinStore: ObservableObject {
                         self.needsRecovery = true; self.isReady = false; self.section = "skins"
                     }
                     if response["ok"] as? Bool == true {
+                        self.didRestoreNative = theme.id == "system" && scale == 1 && marker == 0
+                        if theme.id != "system" { self.missingDownload = false }
                         self.activeID = theme.id
                         self.appliedCursorScale = scale
                         self.appliedMarkerDiameter = marker
@@ -171,6 +209,7 @@ final class CursorSkinStore: ObservableObject {
                     }
                 }
             } catch {
+                self.disconnect()
                 DispatchQueue.main.async {
                     self.isBusy = false; self.isReady = false; self.started = false
                     self.errorKey = "serviceUnavailable"
@@ -196,11 +235,39 @@ final class CursorSkinStore: ObservableObject {
         recover(useNative: true)
     }
 
+    /// Used before removing an active skin. Do not delete its resource until
+    /// the helper has acknowledged a real system restore.
+    func restoreForRemoval(_ completion: @escaping (Bool) -> Void) {
+        guard isReady, !isBusy, !needsRecovery else { completion(false); return }
+        recover(useNative: false, resetPreferences: false, completion: completion)
+    }
+
+    func removeSkin(_ id: String) {
+        guard !isBusy, !needsRecovery, id != "system", SkinPackage.find(id)?.isBundled != true else { return }
+        let remove = {
+            if SkinAssetStore.shared.remove(id) {
+                if UserDefaults.standard.string(forKey: "cursorTheme") == id {
+                    UserDefaults.standard.set("system", forKey: "cursorTheme")
+                }
+                self.missingDownload = false
+            }
+        }
+        if activeID == id {
+            restoreForRemoval { success in
+                if success {
+                    remove()
+                    if self.cursorScale != 1 || self.clickMarkerEnabled { self.apply("system") }
+                }
+            }
+        }
+        else { remove() }
+    }
+
     private func captureSystemImages() {
         CursorCatalog.captureSystemImages(from: directory.appendingPathComponent("system-cursors.plist"))
     }
 
-    private func recover(useNative: Bool) {
+    private func recover(useNative: Bool, resetPreferences: Bool = true, completion: ((Bool) -> Void)? = nil) {
         guard !isBusy, !shuttingDown else { return }
         isBusy = true; errorKey = nil
         resizeWork?.cancel(); reapplyWork?.cancel(); resizePending = false
@@ -212,26 +279,33 @@ final class CursorSkinStore: ObservableObject {
                     guard result["ok"] as? Bool == true else {
                         self.needsRecovery = true; self.isReady = false
                         self.errorKey = result["error"] as? String ?? "restoreFailed"
+                        completion?(false)
                         return
                     }
                     self.captureSystemImages()
                     self.needsRecovery = false; self.isReady = true
                     self.activeID = "system"; self.selectedID = "system"
+                    self.didRestoreNative = true
                     self.appliedCursorScale = 1; self.appliedMarkerDiameter = 0; self.appliedCount = 0
                     // A recovery returns to a usable native pointer. Reapplying
                     // remembered preferences here would immediately undo it.
-                    self.cursorScale = 1; self.clickMarkerEnabled = false
                     UserDefaults.standard.set("system", forKey: "cursorTheme")
-                    UserDefaults.standard.set(1.0, forKey: "cursorScale")
-                    self.saveMarkerPreferences()
+                    if resetPreferences {
+                        self.cursorScale = 1; self.clickMarkerEnabled = false
+                        UserDefaults.standard.set(1.0, forKey: "cursorScale")
+                        self.saveMarkerPreferences()
+                    }
                     self.observeSystemChanges()
                     NotificationCenter.default.post(name: .init("ScrollappCursorSkinChanged"), object: nil)
                     self.refreshVisibleCursor()
+                    completion?(true)
                 }
             } catch {
+                self.disconnect()
                 DispatchQueue.main.async {
                     self.isBusy = false; self.isReady = false; self.started = false
                     self.needsRecovery = false; self.errorKey = "serviceUnavailable"
+                    completion?(false)
                 }
             }
         }
@@ -250,7 +324,12 @@ final class CursorSkinStore: ObservableObject {
             let state: [String: Any] = [
                 "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "",
                 "os": ProcessInfo.processInfo.operatingSystemVersionString,
-                "architecture": "arm64", "screens": screens,
+                "architecture": Self.architecture, "screens": screens,
+                "translated": Self.isTranslated,
+                "accessibility": AXIsProcessTrusted(),
+                "inputMonitoring": CGPreflightListenEventAccess(),
+                "installedSkins": SkinAssetStore.shared.installed.sorted(),
+                "downloadErrors": SkinAssetStore.shared.errors,
                 "error": self.errorKey ?? "", "needsRecovery": self.needsRecovery,
                 "theme": defaults.string(forKey: "cursorTheme") ?? "system",
                 "scale": defaults.double(forKey: "cursorScale"),
@@ -383,8 +462,8 @@ final class CursorSkinStore: ObservableObject {
             if self.process?.isRunning == true {
                 _ = try? self.send(["action": "quit"])
                 try? self.input?.close()
-                self.process?.waitUntilExit()
             }
+            self.disconnect()
             DispatchQueue.main.async { completion() }
         }
     }
@@ -420,17 +499,26 @@ final class CursorSkinStore: ObservableObject {
         return response
     }
     private func readResponse() throws -> [String: Any] {
-        while true {
-            if let newline = buffer.firstIndex(of: 10) {
-                let line = buffer[..<newline]
-                buffer.removeSubrange(...newline)
-                guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any] else {
-                    throw ServiceError(code: "serviceUnavailable")
-                }
-                return object
-            }
-            guard let data = output?.availableData, !data.isEmpty else { throw ServiceError(code: "serviceUnavailable") }
-            buffer.append(data)
-        }
+        guard let output else { throw ServiceError(code: "serviceUnavailable") }
+        return try CursorProtocol.read(from: output, buffer: &buffer)
+    }
+    private func disconnect() {
+        // EOF asks the independent helper to restore. Do not SIGTERM it while
+        // it owns global cursors; its durable journal also survives app exit.
+        process?.terminationHandler = nil
+        try? input?.close()
+        input = nil; output = nil; process = nil; buffer.removeAll()
+    }
+    static var architecture: String {
+        #if arch(arm64)
+        return "arm64"
+        #else
+        return "x86_64"
+        #endif
+    }
+    static var isTranslated: Bool {
+        var value: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        return sysctlbyname("sysctl.proc_translated", &value, &size, nil, 0) == 0 && value == 1
     }
 }

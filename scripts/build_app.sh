@@ -10,36 +10,48 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SDK_PATH="$(xcrun --show-sdk-path)"
-APP_DIR="${SCROLLAPP_OUTPUT_DIR:-build/Scrollapp.app}"
+OUTPUT_APP="${SCROLLAPP_OUTPUT_DIR:-build/Scrollapp.app}"
 BUNDLE_ID="${SCROLLAPP_BUNDLE_ID:-com.scrollapp.app}"
 SRC="Scrollapp"
-VERSION="2.3.9"
-BUILD="29"
+VERSION="2.5.0"
+BUILD="58"
+MIN_OS="13.0"
+ARCHS="${SCROLLAPP_ARCHS:-arm64 x86_64}"
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp/}scrollapp-build.XXXXXX")"
+trap 'rm -rf "$WORK_DIR"' EXIT
+APP_DIR="$WORK_DIR/Scrollapp.app"
 
-echo "==> Cleaning $APP_DIR"
-rm -rf "$APP_DIR"
+echo "==> Building $VERSION ($ARCHS, macOS $MIN_OS+)"
 mkdir -p "$APP_DIR/Contents/MacOS" \
          "$APP_DIR/Contents/Resources/en.lproj" \
          "$APP_DIR/Contents/Resources/zh-Hans.lproj"
 
 echo "==> Compiling Swift sources"
 echo "==> Compiling native cursor service"
-xcrun clang -isysroot "$SDK_PATH" -arch arm64 -mmacosx-version-min=15.0 \
+for ARCH in $ARCHS; do
+case "$ARCH" in arm64|x86_64) ;; *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; esac
+RASTER_OBJECT="$WORK_DIR/CursorRaster-$ARCH.o"
+xcrun clang -isysroot "$SDK_PATH" -arch "$ARCH" -mmacosx-version-min="$MIN_OS" \
   -O2 -fobjc-arc -framework Cocoa -framework ApplicationServices -framework ImageIO \
-  "$SRC/CursorService.m" "$SRC/CursorRaster.m" -o "$APP_DIR/Contents/MacOS/CursorService"
-RASTER_OBJECT="$(mktemp "${TMPDIR:-/tmp/}scrollapp-raster.XXXXXX")"
-trap 'rm -f "$RASTER_OBJECT"' EXIT
-xcrun clang -isysroot "$SDK_PATH" -arch arm64 -mmacosx-version-min=15.0 \
+  "$SRC/CursorService.m" "$SRC/CursorRaster.m" -o "$WORK_DIR/CursorService-$ARCH"
+xcrun clang -isysroot "$SDK_PATH" -arch "$ARCH" -mmacosx-version-min="$MIN_OS" \
   -O2 -fobjc-arc -c "$SRC/CursorRaster.m" -o "$RASTER_OBJECT"
-xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos15.0 \
+xcrun swiftc -sdk "$SDK_PATH" -target "$ARCH-apple-macos$MIN_OS" \
   -O \
   -import-objc-header "$SRC/CursorRaster.h" "$RASTER_OBJECT" \
   -F "$SDK_PATH/System/Library/Frameworks" \
   -framework SwiftUI -framework AppKit -framework Cocoa \
-  -framework UserNotifications -framework ServiceManagement -framework ApplicationServices \
-  -o "$APP_DIR/Contents/MacOS/Scrollapp" \
-  "$SRC/ScrollappApp.swift" "$SRC/ContentView.swift" "$SRC/Localization.swift" "$SRC/StyledDialog.swift" \
-  "$SRC/CursorThemes.swift" "$SRC/CursorSkinStore.swift" "$SRC/SkinSettingsView.swift"
+  -framework UserNotifications -framework ServiceManagement -framework ApplicationServices -framework Security -framework ImageIO \
+  -o "$WORK_DIR/Scrollapp-$ARCH" \
+  "$SRC/ScrollappApp.swift" "$SRC/Appearance.swift" "$SRC/VerticalChannelSlider.swift" "$SRC/ContentView.swift" "$SRC/Localization.swift" "$SRC/StyledDialog.swift" \
+  "$SRC/CursorThemes.swift" "$SRC/CursorSkinStore.swift" "$SRC/SkinSettingsView.swift" \
+  "$SRC/CursorProtocol.swift" "$SRC/PermissionSettings.swift" "$SRC/ScrollDynamics.swift" "$SRC/SkinAssets.swift" \
+  "$SRC/FeaturedSkins.swift" "$SRC/LocalSkinImport.swift" "$SRC/CursorArchive.swift" "$SRC/SupplementedCursors.swift" \
+  "$SRC/ShortcutSequence.swift" "$SRC/ShortcutEngine.swift" "$SRC/ShortcutSettingsView.swift" "$SRC/ShortcutInputShield.swift" \
+  "$SRC/PromptVision.swift" "$SRC/PromptStudioStore.swift" "$SRC/PromptStudioView.swift"
+done
+xcrun lipo -create "$WORK_DIR"/CursorService-* -output "$APP_DIR/Contents/MacOS/CursorService"
+xcrun lipo -create "$WORK_DIR"/Scrollapp-* -output "$APP_DIR/Contents/MacOS/Scrollapp"
 
 echo "==> Writing Info.plist"
 cat > "$APP_DIR/Contents/Info.plist" <<PLIST
@@ -61,11 +73,13 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 		<string>en</string>
 		<string>zh-Hans</string>
 	</array>
-	<key>LSMinimumSystemVersion</key><string>15.0</string>
+	<key>LSMinimumSystemVersion</key><string>${MIN_OS}</string>
 	<key>LSUIElement</key><true/>
 	<key>NSHighResolutionCapable</key><true/>
 	<key>NSAccessibilityUsageDescription</key>
 	<string>This app needs accessibility permissions to enable auto-scrolling with the mouse.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Select a reference image on screen to generate an image prompt.</string>
 </dict>
 </plist>
 PLIST
@@ -74,8 +88,10 @@ echo "==> Installing localization resources"
 cp "$SRC/en.lproj/InfoPlist.strings" "$APP_DIR/Contents/Resources/en.lproj/"
 cp "$SRC/zh-Hans.lproj/InfoPlist.strings" "$APP_DIR/Contents/Resources/zh-Hans.lproj/"
 mkdir -p "$APP_DIR/Contents/Resources/Skins"
-cp "$SRC/Skins/"*.plist "$APP_DIR/Contents/Resources/Skins/"
+# Catalog previews and the user-supplied Doubao package ship in the app.
+# Other full verified packages are downloaded on demand.
 cp "$SRC/Skins/"*.png "$APP_DIR/Contents/Resources/Skins/"
+cp "$SRC/Skins/Doubao.plist" "$APP_DIR/Contents/Resources/Skins/"
 
 echo "==> Embedding icon"
 if [ ! -f build/AppIcon.icns ] && [ -f img/scrollappicon.png ]; then
@@ -98,9 +114,21 @@ fi
 
 printf 'APPL????' > "$APP_DIR/Contents/PkgInfo"
 
-echo "==> Signing (ad-hoc)"
-codesign --force --deep --sign - "$APP_DIR"
+echo "==> Signing"
+if [ -n "${SCROLLAPP_SIGN_IDENTITY:-}" ]; then
+  codesign --force --options runtime --timestamp --sign "$SCROLLAPP_SIGN_IDENTITY" "$APP_DIR/Contents/MacOS/CursorService"
+  codesign --force --options runtime --timestamp --sign "$SCROLLAPP_SIGN_IDENTITY" "$APP_DIR"
+else
+  codesign --force --sign - "$APP_DIR/Contents/MacOS/CursorService"
+  codesign --force --sign - "$APP_DIR"
+fi
+codesign --verify --deep --strict "$APP_DIR"
+case "$OUTPUT_APP" in *.app) ;; *) echo "Output must end in .app" >&2; exit 1 ;; esac
+if [ -L "$OUTPUT_APP" ]; then echo "Refusing symlink output" >&2; exit 1; fi
+mkdir -p "$(dirname "$OUTPUT_APP")"
+rm -rf "$OUTPUT_APP"
+ditto "$APP_DIR" "$OUTPUT_APP"
 
-echo "Done: $APP_DIR"
+echo "Done: $OUTPUT_APP"
 echo "Note: ad-hoc signature changes each build — re-grant Accessibility /"
 echo "      Input Monitoring permissions after replacing the binary."

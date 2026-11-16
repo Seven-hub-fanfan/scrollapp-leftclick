@@ -61,6 +61,16 @@ def main():
         results.append({"test": "core-cache-drift-recovers-with-archive", **ready})
         stop()
 
+        # An older system or cold cache can lack a name present on this Mac.
+        absent = copy.deepcopy(baseline)
+        absent["Names"]["com.apple.cursor.40"] = {"Registered": False}
+        journal.write_bytes(plistlib.dumps(absent))
+        child = launch()
+        ready = response(child)
+        assert ready["ok"] and ready["ready"] and not journal.exists(), ready
+        results.append({"test": "originally-absent-global-registration-recovers", **ready})
+        stop()
+
         # Unwritable original metadata is a genuine named-entry failure.
         broken = copy.deepcopy(baseline)
         name = "com.apple.coregraphics.Arrow"
@@ -90,7 +100,7 @@ def main():
         stop()
 
         # A structurally valid but changed named descriptor must not be dismissed
-        # as cache drift. Non-float-exact metadata exposes readback mismatch.
+        # as cache drift. Changed hotspot metadata exposes readback mismatch.
         broken = copy.deepcopy(baseline)
         broken["Names"][name]["Original"]["HotSpotX"] += 0.123456789
         journal.write_bytes(plistlib.dumps(broken))

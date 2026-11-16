@@ -31,6 +31,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var optionKeyMonitor: Any?
     var scrollMonitor: Any?
     var clickMonitor: Any?
+    var localClickMonitor: Any?
+    private var scrollIntegrator = ScrollIntegrator()
+    private var doubleClickActivation = DoubleClickActivation()
+    private static let syntheticScrollTag: Int64 = 0x5343524F4C4C
+    private var sessionObservers: [NSObjectProtocol] = []
     var scrollCursor: NSCursor?
     var isTrackpadMode = false
     var lastScrollTime: Date?
@@ -38,7 +43,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var isDirectionInverted = false  // Default is now "up scrolls up"
     var launchAtLogin = false        // Track launch at login state
     var scrollSensitivity: Double = 1.0  // Default sensitivity multiplier
-    var activationMethod: ActivationMethod = .middleClick  // Default activation method
+    var activationMethod: ActivationMethod = .doubleMiddleClick
     var leftClickDoesNotInterrupt = false  // Allow left-click without exiting auto-scroll
     var rightClickDoesNotInterrupt = false // Allow right-click without exiting auto-scroll
     /// Tracks whether *we* hid the cursor. NSCursor.hide()/unhide() are a counted
@@ -48,6 +53,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // Tags used to locate dynamic menu items without relying on (localized) titles.
     static let sensitivityMenuItemTag = 900
     static let activationMenuItemTag = 901
+    static let shortcutProgressMenuTag = 902
+    static let shortcutLoopMenuTag = 903
 
     var settingsWindow: NSWindow?
     var hudWindow: NSWindow?
@@ -111,14 +118,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Safety: always unhide cursor on launch in case of unclean exit
-        NSCursor.unhide()
         NSCursor.setHiddenUntilMouseMoves(false)
 
         // Load user preferences
         isDirectionInverted = UserDefaults.standard.bool(forKey: "invertScrollDirection")
         launchAtLogin = UserDefaults.standard.bool(forKey: "launchAtLogin")
         scrollSensitivity = UserDefaults.standard.double(forKey: "scrollSensitivity")
-        if scrollSensitivity == 0 { scrollSensitivity = 1.0 } // Default if not set
+        if !scrollSensitivity.isFinite || !(0.2...3).contains(scrollSensitivity) {
+            scrollSensitivity = 1
+            UserDefaults.standard.set(1.0, forKey: "scrollSensitivity")
+        }
         
         leftClickDoesNotInterrupt = UserDefaults.standard.bool(forKey: "leftClickDoesNotInterrupt")
         rightClickDoesNotInterrupt = UserDefaults.standard.bool(forKey: "rightClickDoesNotInterrupt")
@@ -130,41 +139,64 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         // Set initial launch at login state based on saved preference
-        let isSkinPreview = CommandLine.arguments.contains("--skin-preview")
+        let isSkinPreview = CommandLine.arguments.contains("--skin-preview") || CommandLine.arguments.contains("--prompt-preview")
         if !isSkinPreview { updateLoginItemState() }
         
         // Check and request Accessibility permissions
-        if !isSkinPreview { checkAccessibilityPermissions() }
+        PermissionStore.shared.start()
         
         setupMenuBar()
         createScrollCursor()
-        CursorSkinStore.shared.start()
+        if !CommandLine.arguments.contains("--prompt-preview") { CursorSkinStore.shared.start() }
         NotificationCenter.default.addObserver(self, selector: #selector(cursorSkinDidChange),
             name: NSNotification.Name("ScrollappCursorSkinChanged"), object: nil)
         if !isSkinPreview {
+            ShortcutEngine.shared.middleDoubleClickInterval = { [weak self] in
+                self?.activationMethod == .doubleMiddleClick ? NSEvent.doubleClickInterval : 0
+            }
+            ShortcutEngine.shared.middleClickAllowed = { [weak self] in
+                guard let self else { return false }
+                return !self.isAutoScrolling && self.activationMethod != .middleClick
+            }
             setupMiddleClickListeners()
             setupTrackpadActivation()
+            ShortcutEngine.shared.start()
         }
+        NotificationCenter.default.addObserver(self, selector: #selector(shortcutSequenceChanged),
+            name: .init("ScrollappShortcutSequenceChanged"), object: nil)
         
-        // Request notification permission
-        if !isSkinPreview {
-            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        NotificationCenter.default.addObserver(self, selector: #selector(permissionsChanged),
+            name: .init("ScrollappPermissionsChanged"), object: nil)
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
+            sessionObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name,
+                object: nil, queue: .main) { [weak self] _ in self?.stopAutoScroll() })
+        }
+        if !isSkinPreview && !UserDefaults.standard.bool(forKey: "hasSeenPermissionIntro") {
+            UserDefaults.standard.set(true, forKey: "hasSeenPermissionIntro")
+            checkAccessibilityPermissions()
         }
 
         // Listen for changes from the settings window
         for name in ["ScrollappSensitivityChanged", "ScrollappInvertChanged", "ScrollappLeftClickChanged", "ScrollappRightClickChanged", "ScrollappLaunchChanged", "ScrollappActivationChanged"] {
             NotificationCenter.default.addObserver(self, selector: #selector(settingsDidChange), name: NSNotification.Name(name), object: nil)
         }
-        if CommandLine.arguments.contains("--show-skins") {
+        if CommandLine.arguments.contains("--show-prompt") {
+            showPromptStudio()
+        } else if CommandLine.arguments.contains("--show-shortcuts") {
+            showShortcutSettings()
+        } else if CommandLine.arguments.contains("--show-skins") {
             CursorSkinStore.shared.section = "skins"
             showSettingsWindow()
         } else if CommandLine.arguments.contains("--show-settings") {
             showSettingsWindow()
+        } else if CommandLine.arguments.contains("--show-permissions") {
+            showPermissionSettings()
         }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         stopAutoScroll()
+        ShortcutEngine.shared.stop()
         CursorSkinStore.shared.shutdown { sender.reply(toApplicationShouldTerminate: true) }
         return .terminateLater
     }
@@ -246,6 +278,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: L10n.t("menu.settings"), action: #selector(showSettingsWindow), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: L10n.t("settings.skins"), action: #selector(showSkinSettings), keyEquivalent: ""))
+        let shortcutItem = NSMenuItem(title: L10n.t("settings.shortcuts"),
+            action: #selector(showShortcutSettings), keyEquivalent: "")
+        shortcutItem.tag = Self.shortcutProgressMenuTag
+        let shortcutMenu = NSMenu()
+        shortcutMenu.addItem(NSMenuItem(title: L10n.t("shortcuts.open"),
+            action: #selector(showShortcutSettings), keyEquivalent: ""))
+        let loopItem = NSMenuItem(title: L10n.t("shortcuts.loop"),
+            action: #selector(shortcutLoop), keyEquivalent: "")
+        loopItem.tag = Self.shortcutLoopMenuTag
+        shortcutMenu.addItem(loopItem)
+        shortcutMenu.addItem(NSMenuItem(title: L10n.t("shortcuts.back"),
+            action: #selector(shortcutBack), keyEquivalent: ""))
+        shortcutMenu.addItem(NSMenuItem(title: L10n.t("shortcuts.reset"),
+            action: #selector(shortcutReset), keyEquivalent: ""))
+        shortcutItem.submenu = shortcutMenu
+        menu.addItem(shortcutItem)
+        menu.addItem(NSMenuItem(title: L10n.t("settings.prompt"), action: #selector(showPromptStudio), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: L10n.t("prompt.pasteMenu"), action: #selector(promptFromClipboard), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: L10n.t("settings.permissions"), action: #selector(showPermissionSettings), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: L10n.t("menu.about"), action: #selector(showAbout), keyEquivalent: ""))
         
         let methodsMenu = NSMenu()
@@ -262,6 +313,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: L10n.t("menu.quit"), action: #selector(quitApp), keyEquivalent: "q"))
         statusItem.menu = menu
+        shortcutSequenceChanged()
     }
 
     func createScrollCursor() {
@@ -339,10 +391,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         CursorSkinStore.shared.activeCursor().set()
     }
 
-    var lastClickTime: Date?
-    var clickCount = 0
-
     func setupMiddleClickListeners() {
+        doubleClickActivation.reset()
         // Remove existing monitors
         if let monitor = globalMonitor {
             NSEvent.removeMonitor(monitor)
@@ -374,31 +424,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Handle double-click detection for double middle click
         if activationMethod == .doubleMiddleClick {
-            let now = Date()
-            if let lastClick = lastClickTime, now.timeIntervalSince(lastClick) < 0.5 {
-                clickCount += 1
-                if clickCount >= 2 {
-                    // Double click detected
-                    clickCount = 0
-                    lastClickTime = nil
-                    isAutoScrolling ? stopAutoScroll() : startAutoScroll(at: location)
-                }
-            } else {
-                clickCount = 1
-                lastClickTime = now
-                // Reset click count after timeout
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                    self?.clickCount = 0
-                    self?.lastClickTime = nil
-                }
+            if doubleClickActivation.click(at: ProcessInfo.processInfo.systemUptime, interval: NSEvent.doubleClickInterval) {
+                ShortcutEngine.shared.cancelPendingMiddleClick()
+                isAutoScrolling ? stopAutoScroll() : startAutoScroll(at: location)
             }
         } else {
             // Single click activation
+            ShortcutEngine.shared.cancelPendingMiddleClick()
             isAutoScrolling ? stopAutoScroll() : startAutoScroll(at: location)
         }
     }
 
     func startAutoScroll(at point: NSPoint) {
+        ShortcutEngine.shared.cancelPendingMiddleClick()
+        guard AXIsProcessTrusted() else { showPermissionSettings(); return }
         stopAutoScroll()
         originalPoint = point
         isAutoScrolling = true
@@ -447,16 +486,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Dynamic threshold based on sensitivity - allow very slow scrolling at low sensitivities
         let threshold = min(0.1, adjustedSensitivity * 0.5)
         if abs(finalAmount) < threshold {
+            scrollIntegrator.reset()
             return // don't scroll unless meaningful
         }
+        let pixels = scrollIntegrator.pixels(for: finalAmount)
+        guard pixels != 0 else { return }
 
         if let scrollEvent = CGEvent(scrollWheelEvent2Source: nil,
                                     units: .pixel,
                                     wheelCount: 1,
-                                    wheel1: Int32(finalAmount),
+                                    wheel1: pixels,
                                     wheel2: 0,
                                     wheel3: 0) {
             scrollEvent.flags = .maskNonCoalesced
+            scrollEvent.setIntegerValueField(.eventSourceUserData, value: Self.syntheticScrollTag)
             scrollEvent.post(tap: .cgSessionEventTap)
         }
     }
@@ -470,6 +513,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func startTrackpadAutoScroll() {
+        guard AXIsProcessTrusted() else { showPermissionSettings(); return }
         stopAutoScroll() // Clear any existing state
         
         isTrackpadMode = true
@@ -497,31 +541,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         hudWindow = nil
 
         let hud = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 200, height: 50),
+            contentRect: NSRect(x: 0, y: 0, width: 240, height: 48),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
-        hud.isOpaque = false
         hud.isReleasedWhenClosed = false
-        hud.backgroundColor = NSColor.black.withAlphaComponent(0.75)
+        AppAppearance.configure(hud)
         hud.level = .floating
         hud.ignoresMouseEvents = true
         hud.hasShadow = true
         hud.center()
 
-        let textField = NSTextField(labelWithString: L10n.t("hud.active"))
-        textField.font = NSFont.boldSystemFont(ofSize: 18)
-        textField.textColor = .white
-        textField.alignment = .center
-        textField.frame = hud.contentView!.bounds.insetBy(dx: 10, dy: 10)
-        textField.autoresizingMask = [.width, .height]
-        hud.contentView?.addSubview(textField)
+        hud.contentView = NSHostingView(rootView: ScrollStatusHUD())
 
-        hud.makeKeyAndOrderFront(nil)
+        hud.orderFrontRegardless()
         hudWindow = hud
 
-        // Fade out and close after 1.5 seconds
+        // Close after 1.5 seconds without intercepting any pointer input.
         let thisHud = hud
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             if self?.hudWindow === thisHud {
@@ -532,6 +569,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func showTrackpadModeNotification() {
+        guard PermissionStore.shared.notifications else { return }
         let content = UNMutableNotificationContent()
         content.title = L10n.t("hud.active")
         content.body = L10n.t("notification.body")
@@ -593,13 +631,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let hostingController = NSHostingController(rootView: contentView)
             let window = NSWindow(contentViewController: hostingController)
             window.title = L10n.t("settings.windowTitle")
-            window.styleMask = [.titled, .closable, .miniaturizable]
-            window.setContentSize(NSSize(width: 720, height: 620))
-            // The redesigned UI uses a fixed light palette, so pin the appearance
-            // and blend the title bar into the window background.
-            window.appearance = NSAppearance(named: .aqua)
+            window.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]
+            window.setContentSize(NSSize(width: Style.windowWidth, height: Style.windowHeight))
             window.titlebarAppearsTransparent = true
-            window.backgroundColor = NSColor(calibratedWhite: 0.925, alpha: 1.0)
+            window.titleVisibility = .hidden
+            AppAppearance.configure(window)
             // Must stay false: with background dragging enabled, AppKit steals the
             // drag before SwiftUI's slider gesture sees it, so dragging the speed
             // slider used to drag / flicker the whole window. The title bar still drags.
@@ -621,6 +657,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func showSkinSettings() {
         CursorSkinStore.shared.section = "skins"
         showSettingsWindow()
+    }
+
+    @objc func showPromptStudio() {
+        CursorSkinStore.shared.section = "prompt"
+        showSettingsWindow()
+    }
+
+    @MainActor @objc func promptFromClipboard() {
+        showPromptStudio()
+        PromptStudioStore.shared.paste()
     }
 
     @objc func cursorSkinDidChange() {
@@ -646,7 +692,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         switch notification.name.rawValue {
         case "ScrollappSensitivityChanged":
             let newVal = ud.double(forKey: "scrollSensitivity")
-            scrollSensitivity = newVal == 0 ? 1.0 : newVal
+            scrollSensitivity = newVal.isFinite && (0.2...3).contains(newVal) ? newVal : 1.0
             updateMenuSensitivity()
 
         case "ScrollappInvertChanged":
@@ -722,12 +768,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         isAutoScrolling = false
         isTrackpadMode = false
         originalPoint = nil
+        scrollIntegrator.reset()
+        lastScrollTime = nil
     }
 
     func setupTrackpadActivation() {
+        for monitor in [optionKeyMonitor, scrollMonitor, clickMonitor, localClickMonitor].compactMap({ $0 }) {
+            NSEvent.removeMonitor(monitor)
+        }
+        optionKeyMonitor = nil; scrollMonitor = nil; clickMonitor = nil; localClickMonitor = nil
         // Detect Option key via flagsChanged
         optionKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            guard let self = self else { return }
+            guard let self = self,
+                  event.cgEvent?.getIntegerValueField(.eventSourceUserData) !=
+                    SystemShortcutDelivery.syntheticTag else { return }
             
             // Detect Option key
             let optionKeyFlag = NSEvent.ModifierFlags.option
@@ -738,10 +792,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.lastScrollTime = Date()
                 
                 // If we detect a scroll within 1 second of Option press, activate auto-scroll
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                    self?.lastScrollTime = nil
-                }
-            }
+            } else { self.lastScrollTime = nil }
         }
         
         // Detect two-finger scroll while Option is pressed
@@ -750,6 +801,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                   let lastScrollTime = self.lastScrollTime,
                   Date().timeIntervalSince(lastScrollTime) < 1.0,
                   !self.isAutoScrolling,
+                  event.modifierFlags.contains(.option),
+                  event.cgEvent?.getIntegerValueField(.eventSourceUserData) != Self.syntheticScrollTag,
                   abs(event.deltaY) > 0.1 else { return }
             
             // Option + scroll detected, activate auto-scroll
@@ -757,7 +810,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         // Monitor for clicks to exit auto-scroll mode
-        clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
+        let handleStop: (NSEvent) -> Void = { [weak self] event in
             guard let self = self, self.isAutoScrolling else { return }
 
             // Don't stop auto-scroll for the configured activation button
@@ -779,6 +832,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             // For all other clicks, stop auto-scroll
             self.stopAutoScroll()
+        }
+        clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown], handler: handleStop)
+        localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { event in
+            handleStop(event); return event
         }
     }
 
@@ -845,8 +902,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
             } catch {
-                print("Failed to update login item: \(error.localizedDescription)")
+                PermissionStore.shared.loginError = true
             }
+            launchAtLogin = service.status == .enabled
+            UserDefaults.standard.set(launchAtLogin, forKey: "launchAtLogin")
+            PermissionStore.shared.refresh()
         } else {
             // Use the older SMLoginItemSetEnabled API for macOS 11.0-12.x
             if let bundleIdentifier = Bundle.main.bundleIdentifier {
@@ -871,17 +931,56 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                                  isWarning: true) { openSettings in
                 guard openSettings else { return }
                 // Open Accessibility preferences
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                    NSWorkspace.shared.open(url)
-                }
+                self.showPermissionSettings()
+                PermissionStore.shared.requestAccessibility()
             }
         }
+    }
+    @objc func showPermissionSettings() {
+        CursorSkinStore.shared.section = "permissions"
+        showSettingsWindow()
+    }
+    @objc func permissionsChanged() {
+        guard !CommandLine.arguments.contains("--skin-preview"),
+              !CommandLine.arguments.contains("--prompt-preview") else { return }
+        if !AXIsProcessTrusted() { stopAutoScroll() }
+        setupMiddleClickListeners()
+        setupTrackpadActivation()
+        ShortcutEngine.shared.refreshListener()
+    }
+
+    @objc func showShortcutSettings() {
+        CursorSkinStore.shared.section = "shortcuts"
+        showSettingsWindow()
+    }
+    @objc func shortcutBack() {
+        NotificationCenter.default.post(name: .init("ScrollappShortcutRecordingCancelled"), object: nil)
+        ShortcutEngine.shared.back()
+    }
+    @objc func shortcutReset() {
+        NotificationCenter.default.post(name: .init("ScrollappShortcutRecordingCancelled"), object: nil)
+        ShortcutEngine.shared.reset()
+    }
+    @objc func shortcutLoop() {
+        NotificationCenter.default.post(name: .init("ScrollappShortcutRecordingCancelled"), object: nil)
+        ShortcutEngine.shared.setLooping(!ShortcutEngine.shared.sequence.isLooping)
+    }
+    @objc func shortcutSequenceChanged() {
+        let sequence = ShortcutEngine.shared.sequence
+        guard let item = statusItem?.menu?.item(withTag: Self.shortcutProgressMenuTag) else { return }
+        item.title = sequence.steps.isEmpty ? L10n.t("settings.shortcuts") :
+            L10n.t(sequence.isLooping ? "shortcuts.menuLoopProgress" : "shortcuts.menuProgress",
+                sequence.isLooping ? sequence.position + 1 : sequence.position, sequence.steps.count)
+        item.state = sequence.isEnabled ? .on : .off
+        item.submenu?.item(withTag: Self.shortcutLoopMenuTag)?.state = sequence.isLooping ? .on : .off
     }
 }
 
 extension AppDelegate: NSWindowDelegate {
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        NotificationCenter.default.post(name: .init("ScrollappShortcutRecordingCancelled"), object: nil)
         sender.orderOut(nil)
+        ShortcutInputShield.shared.refresh()
         NSApp.setActivationPolicy(.accessory)
         return false // don't close, just hide
     }

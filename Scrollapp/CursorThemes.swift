@@ -15,25 +15,40 @@ enum CursorMarkerSizing {
 enum CursorRole: String, CaseIterable {
     case arrow, text, link, grab, crosshair, horizontal, vertical, diagonalRight, diagonalLeft, unavailable, help, zoomIn, zoomOut
     var label: String { L10n.t("skins.role.\(rawValue)") }
+    var detailLabel: String { L10n.t("skins.detail.role.\(rawValue)") }
+    var description: String { L10n.t("skins.detail.usage.\(rawValue)") }
 }
 
 struct CursorTheme: Identifiable {
     let id: String
     let color: Color
     let resource: String?
-    var name: String { L10n.t("skins.\(id).name") }
-    var subtitle: String { L10n.t("skins.\(id).description") }
+    var featured: FeaturedSkin? { FeaturedSkin.find(id) }
+    var isBundled: Bool { SkinPackage.find(id)?.isBundled == true }
+    var isPixelated: Bool { ["mint", "sweezy-bmw-m4", "sweezy-old-roblox"].contains(id) }
+    var name: String { featured?.title ?? L10n.t("skins.\(id).name") }
+    var subtitle: String { featured?.category ?? L10n.t("skins.\(id).description") }
+    var introduction: String { featured == nil ? L10n.t("skins.\(id).introduction") : L10n.t("skins.featured.introduction") }
 }
 
 // Semantic roles are the theme-author contract. System identifiers live here,
 // in one versioned mapping, rather than being duplicated in every skin.
 enum CursorCatalog {
-    static let themes: [CursorTheme] = [
+    static let localThemes: [CursorTheme] = [
         .init(id: "system", color: Color(red: 0.87, green: 0.88, blue: 0.90), resource: nil),
         .init(id: "frog", color: Color(red: 0.87, green: 0.94, blue: 0.78), resource: "Frog"),
-        .init(id: "xiaoqi", color: Color(red: 0.92, green: 0.94, blue: 0.79), resource: "Xiaoqi")
+        .init(id: "xiaoqi", color: Color(red: 0.92, green: 0.94, blue: 0.79), resource: "Xiaoqi"),
+        .init(id: "doubao", color: Color(red: 1.00, green: 0.80, blue: 0.23), resource: "Doubao")
     ]
+    static var featuredThemes: [CursorTheme] {
+        FeaturedSkin.ranked.map { .init(id: $0.id, color: Color(red: 0.91, green: 0.81, blue: 0.68), resource: nil) }
+    }
+    static var themes: [CursorTheme] { localThemes + featuredThemes }
     static func theme(_ id: String) -> CursorTheme { themes.first { $0.id == id } ?? themes[0] }
+    static func usesSystemCursor(_ theme: CursorTheme, role: CursorRole) -> Bool {
+        theme.id == "system" || (theme.id == "xiaoqi" && [.zoomIn, .zoomOut].contains(role))
+            || roles(for: theme)[role.rawValue]?["RestoreOriginal"] as? Bool == true
+    }
     static let mapping: [String: CursorRole] = {
         var result: [String: CursorRole] = [:]
         func core(_ suffixes: [String], _ role: CursorRole) {
@@ -71,6 +86,13 @@ enum CursorCatalog {
     private static var systemDescriptors: [CursorRole: [String: Any]] = [:]
     private static var cursorCache: [String: NSCursor] = [:]
     private static var cursorCacheOrder: [String] = []
+    static func invalidate(_ id: String) {
+        SupplementedCursors.invalidate(id)
+        resourceCache.removeValue(forKey: id); cacheOrder.removeAll { $0 == id }
+        thumbnails = thumbnails.filter { !$0.key.hasPrefix("\(id).") }
+        cursorCache = cursorCache.filter { !$0.key.hasPrefix("\(id).") }
+        cursorCacheOrder.removeAll { $0.hasPrefix("\(id).") }
+    }
     static func captureSystemImages(from url: URL) {
         // The helper exports this only after recovering its journal. AppKit's
         // own NSCursor singletons may still hold images from the previous skin.
@@ -120,8 +142,12 @@ enum CursorCatalog {
         case .horizontal, .diagonalRight, .diagonalLeft: return .resizeLeftRight
         case .vertical: return .resizeUpDown
         case .unavailable: return .operationNotAllowed
-        case .zoomIn: return .zoomIn
-        case .zoomOut: return .zoomOut
+        case .zoomIn:
+            if #available(macOS 15.0, *) { return .zoomIn }
+            return .crosshair
+        case .zoomOut:
+            if #available(macOS 15.0, *) { return .zoomOut }
+            return .crosshair
         case .arrow: return .arrow
         }
     }
@@ -132,30 +158,37 @@ enum CursorCatalog {
             return cached
         }
         var roles: [String: [String: Any]] = [:]
-        if let name = theme.resource,
-           let url = Bundle.main.url(forResource: name, withExtension: "plist", subdirectory: "Skins"),
-           let data = try? Data(contentsOf: url),
-           let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-           let stored = root["Roles"] as? [String: [String: Any]] {
+        if SkinAssetStore.shared.isInstalled(theme.id),
+           let stored = try? SkinAssetStore.shared.validatedRoles(theme.id) {
             roles = stored
-        } else if theme.resource == nil && theme.id != "system" {
+        } else if ["ink", "mint"].contains(theme.id) {
             for role in CursorRole.allCases { roles[role.rawValue] = VectorCursor.descriptor(role, mint: theme.id == "mint") }
+        }
+        roles = resolvedRoles(roles, themeID: theme.id)
+        resourceCache[theme.id] = roles
+        cacheOrder.append(theme.id)
+        if cacheOrder.count > 2 { resourceCache.removeValue(forKey: cacheOrder.removeFirst()) }
+        return roles
+    }
+
+    static func resolvedRoles(_ stored: [String: [String: Any]], themeID: String) -> [String: [String: Any]] {
+        var roles = stored
+        if FeaturedSkin.find(themeID) != nil,
+           let supplements = try? SupplementedCursors.resolve(themeID, base: stored, directory: SkinAssetStore.shared.directory) {
+            for (role, descriptor) in supplements { roles[role] = descriptor }
         }
         // Existing frog artwork has eight shapes. Rotations generate additional
         // resize orientations while retaining its own artwork and click hotspot.
-        if theme.id == "frog", let arrow = roles["arrow"] {
+        if themeID == "frog", let arrow = roles["arrow"] {
             roles["crosshair"] = VectorCursor.frogVariant(arrow, role: .crosshair)
             roles["help"] = VectorCursor.frogVariant(arrow, role: .help)
             roles["zoomIn"] = VectorCursor.frogVariant(arrow, role: .zoomIn)
             roles["zoomOut"] = VectorCursor.frogVariant(arrow, role: .zoomOut)
         }
-        if theme.id == "frog", let vertical = roles["vertical"] {
+        if themeID == "frog", let vertical = roles["vertical"] {
             roles["diagonalRight"] = VectorCursor.rotated(vertical, radians: .pi / 4)
             roles["diagonalLeft"] = VectorCursor.rotated(vertical, radians: -.pi / 4)
         }
-        resourceCache[theme.id] = roles
-        cacheOrder.append(theme.id)
-        if cacheOrder.count > 2 { resourceCache.removeValue(forKey: cacheOrder.removeFirst()) }
         return roles
     }
 
@@ -164,7 +197,10 @@ enum CursorCatalog {
         let key = "\(theme.id).\(role.rawValue)"
         if let cached = thumbnails[key] { return cached }
         let image: NSImage
-        if let name = theme.resource, let url = Bundle.main.url(forResource: "\(name)-\(role.rawValue)",
+        if theme.featured != nil {
+            image = SkinAssetStore.shared.isInstalled(theme.id) ? self.image(theme, role: role) :
+                NSImage(size: NSSize(width: 32, height: 32))
+        } else if let name = theme.resource, let url = Bundle.main.url(forResource: "\(name)-\(role.rawValue)",
             withExtension: "png", subdirectory: "Skins"), let loaded = NSImage(contentsOf: url) {
             image = loaded
         } else if theme.resource != nil {
@@ -173,7 +209,7 @@ enum CursorCatalog {
             let d = VectorCursor.descriptor(role, mint: theme.id == "mint")
             image = NSImage(data: (d["Representations"] as! [Data])[1])!
         }
-        image.size = NSSize(width: 32, height: 32)
+        if theme.featured == nil { image.size = NSSize(width: 32, height: 32) }
         thumbnails[key] = image
         return image
     }
@@ -199,6 +235,9 @@ enum CursorCatalog {
         if theme.id == "system" {
             return systemImages[role] ?? systemCursor(role).image
         }
+        if !SkinAssetStore.shared.isInstalled(theme.id) {
+            return usesSystemCursor(theme, role: role) ? systemCursor(role).image : thumbnail(theme, role: role)
+        }
         let descriptor = roles(for: theme)[role.rawValue]
         if descriptor?["RestoreOriginal"] as? Bool == true {
             return systemImages[role] ?? systemCursor(role).image
@@ -206,7 +245,8 @@ enum CursorCatalog {
         guard let pngs = descriptor?["Representations"] as? [Data],
               let data = pngs.max(by: { pixelWidth($0) < pixelWidth($1) }),
               let image = NSImage(data: data) else { return NSCursor.arrow.image }
-        image.size = NSSize(width: 32, height: 32)
+        image.size = theme.featured == nil ? NSSize(width: 32, height: 32) :
+            NSSize(width: descriptor?["PointsWide"] as? Double ?? 32, height: descriptor?["PointsHigh"] as? Double ?? 32)
         return image
     }
 
@@ -234,7 +274,7 @@ enum CursorCatalog {
             }
         }
         guard let descriptor, let rendered = SCRCursorRaster.render(descriptor, scale: scale,
-            pixelated: theme.id == "mint", markerDiameter: markerDiameter),
+            pixelated: theme.isPixelated, markerDiameter: markerDiameter),
             let pngs = rendered["Representations"] as? [Data],
             let w = rendered["PointsWide"] as? Double, let h = rendered["PointsHigh"] as? Double,
             let x = rendered["HotSpotX"] as? Double, let y = rendered["HotSpotY"] as? Double

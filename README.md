@@ -2,7 +2,9 @@
 
 [![GitHub Downloads](https://img.shields.io/github/downloads/Seven-hub-fanfan/scrollapp-leftclick/total.svg)](https://github.com/Seven-hub-fanfan/scrollapp-leftclick/releases)
 
-A macOS utility that brings Windows-style auto-scrolling to macOS. Middle-click anywhere to enable auto-scroll mode, then move your cursor to control scrolling speed and direction.
+A native macOS utility for auto-scrolling, cursor skins, click-triggered shortcuts
+and image-to-prompt analysis. Double middle-click enables auto-scroll by default;
+move your cursor to control scrolling speed and direction.
 
 <img src="img/scrollappicon.png" width="100" alt="Scrollapp Icon">
 
@@ -17,20 +19,25 @@ A macOS utility that brings Windows-style auto-scrolling to macOS. Middle-click 
 - **Launch at Login**: Optional automatic startup
 - **Menu Bar Integration**: Quick access via status menu in the menu bar
 - **Global Cursor Skins**: System Default, Nai Wa and Xiao Qi, with favorites and previews
+- **Optional Skin Downloads**: Download only the skins you want, use them offline, and delete local downloads
+- **Persistent Permissions Page**: Reopen permission settings after skipping the first launch prompt
 - **Cursor Size**: Adjustable from 0.5× to 8×, with immediate local feedback
 - **High-resolution Xiao Qi**: Five PNG resolutions up to 512 px, generated from a 4× restored reference
 - **Cursor Recovery**: Restores the original cursors on quit or app crash
+- **Image to Prompt**: Native reference/result workspace with local images, clipboard, image URLs and region capture
+- **Multiple Vision APIs**: Save and switch OpenAI-compatible, Gemini and Anthropic connections, including local Ollama; keys stay in macOS Keychain
+- **Prompt History**: Chinese/English/JSON/negative results, five-image sequential analysis, cancellation, favorites and Markdown export
 
 ## Installation
 
-1. **Download**: Download the Apple Silicon DMG from the [Releases](https://github.com/Seven-hub-fanfan/scrollapp-leftclick/releases) page.
+1. **Download**: Download `Scrollapp-2.5.0-universal.dmg` from the [v2.5.0 release](https://github.com/Seven-hub-fanfan/scrollapp-leftclick/releases/tag/v2.5.0). It contains Apple Silicon and Intel binaries.
 2. **Install**: Open the DMG file and drag Scrollapp to your Applications folder.
 3. **Security Override**: Since the app is distributed without Apple notarization, you'll need to manually allow it:
    - **Method 1**: Right-click on Scrollapp.app → "Open" → "Open" in the dialog
    - **Method 2**: If you see "can't be opened" error, go to System Settings → Privacy & Security → scroll down to find "Scrollapp was blocked" → click "Open Anyway"
 4. **Grant Permissions**:
    - When prompted, grant Accessibility and Input Monitoring permissions.
-   - If you miss a prompt, you can grant permissions manually in System Settings:
+   - If you miss a prompt, open **Permissions** from the app sidebar or menu bar to return to System Settings:
      - Go to `System Settings > Privacy & Security > Accessibility` and add Scrollapp.
      - Go to `System Settings > Privacy & Security > Input Monitoring` and enable Scrollapp.
    - You may need to restart the app after granting permissions.
@@ -38,7 +45,10 @@ A macOS utility that brings Windows-style auto-scrolling to macOS. Middle-click 
 Quit an older Scrollapp before replacing it. The new app may need its
 Accessibility and Input Monitoring permissions granted again.
 
-Open **Cursor Skins** from the menu bar to select and apply a skin.
+Open **Cursor Skins** from the menu bar, select a skin, download it, then apply it.
+First download requires access to GitHub; installed skins work offline.
+**Delete Download** frees local storage and first restores system cursors if the
+skin is active. Upgrading from bundled skins requires downloading them again.
 Open **General** to adjust cursor size and enable the red click hotspot. Its
 3–16 pt diameter is independent of cursor size. **Reset** selects the system
 skin while keeping size and hotspot settings; quitting restores the original cursors.
@@ -49,13 +59,13 @@ skin while keeping size and hotspot settings; quitting restores the original cur
 
 **With Mouse (Configurable):**
 Choose your preferred activation method from the menu bar:
-- **Middle Click** (default)
+- **Middle Click**
 - **Shift + Middle Click**
 - **Cmd + Middle Click** 
 - **Option + Middle Click**
 - **Mouse Button 4** (side button)
 - **Mouse Button 5** (side button)
-- **Double Middle Click**
+- **Double Middle Click** (default)
 
 Use your chosen method to toggle auto-scroll on/off, or click any other mouse button to exit.
 
@@ -95,17 +105,24 @@ Access additional options from the menu bar icon:
 
 ## System Requirements
 
-- macOS 15.0 (Sequoia) or later
+- Deployment target: macOS 13.0 or later
 - Mouse with middle button, side buttons, or trackpad support
-- This release supports Apple Silicon Macs (arm64)
+- 2.5.0 includes Apple Silicon (arm64) and Intel (x86_64) binaries
 
 Global cursor skins use private macOS interfaces and have been verified on
-macOS 26.6.2. Compatibility with other system versions and app-drawn cursors
-requires separate validation.
+macOS 26.6.2 / Apple M2 Pro. The x86_64 path has passed Rosetta tests.
+Intel hardware and macOS 13/14/15 have not been tested. A deployment target
+and a Universal binary do not certify those environments. App-drawn cursors
+may not follow global cursor replacements.
+
+2.5.0 is a preview distribution: it has no Developer ID signature or Apple
+notarization, and Gatekeeper assessment rejects the ad-hoc signature.
+See the attached validation report for tested and pending scenarios.
 
 ## Privacy & Security
 
-- **Permissions**: Scrollapp requires Input Monitoring permissions to detect mouse/trackpad events. It does not collect or transmit any personal data.
+- **Permissions**: Accessibility and Input Monitoring support global scrolling and shortcuts. Region capture needs Screen Recording; local image import does not.
+- **Images and APIs**: Image analysis sends a resized reference image and instructions only to the API you select. Provider fees and data handling apply. Local Ollama can keep analysis on your Mac. API keys use macOS Keychain; history and reference copies stay in local application storage.
 - **Code Signing**: The app is ad-hoc signed for free distribution. While this triggers macOS security warnings, the source code is fully open and auditable on GitHub.
 
 ## License
@@ -114,8 +131,8 @@ requires separate validation.
 
 ## Building from Source
 
-Clone `https://github.com/Seven-hub-fanfan/scrollapp-leftclick` and install
-Xcode Command Line Tools. From the repository root:
+Clone `https://github.com/Seven-hub-fanfan/scrollapp-leftclick` and check out
+`v2.5.0` for the release source. Install Xcode Command Line Tools. From the source root:
 
 ```bash
 bash scripts/build_app.sh

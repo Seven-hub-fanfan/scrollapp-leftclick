@@ -141,6 +141,15 @@ scripts/*
 !scripts/verify_cursor_service.py
 !scripts/verify_cursor_recovery.py
 !scripts/verify_cursor_raster.swift
+!scripts/verify_core.swift
+!scripts/verify_skin_assets.swift
+!scripts/verify_skin_lifecycle.swift
+!scripts/generate_skin_previews.swift
+!scripts/create_dmg_from_app.sh
+!scripts/README.md
+!scripts/verify_shortcuts.swift
+!scripts/verify_prompt_vision.swift
+!scripts/verify_prompt_vision.py
 
 # Temporary files  
 dmg_temp/
