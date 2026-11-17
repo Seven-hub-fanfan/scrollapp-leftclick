@@ -27,10 +27,11 @@ move your cursor to control scrolling speed and direction.
 - **Image to Prompt**: Native reference/result workspace with local images, clipboard, image URLs and region capture
 - **Multiple Vision APIs**: Save and switch OpenAI-compatible, Gemini and Anthropic connections, including local Ollama; keys stay in macOS Keychain
 - **Prompt History**: Chinese/English/JSON/negative results, five-image sequential analysis, cancellation, favorites and Markdown export
+- **Click-triggered Shortcuts**: Record up to ten steps and choose Target app or System hotkey delivery for each step, with optional looping
 
 ## Installation
 
-1. **Download**: Download `Scrollapp-2.5.0-universal.dmg` from the [v2.5.0 release](https://github.com/Seven-hub-fanfan/scrollapp-leftclick/releases/tag/v2.5.0). It contains Apple Silicon and Intel binaries.
+1. **Download**: Download `Scrollapp-2.5.1-universal.dmg` from the [v2.5.1 release](https://github.com/Seven-hub-fanfan/scrollapp-leftclick/releases/tag/v2.5.1). It contains Apple Silicon and Intel binaries.
 2. **Install**: Open the DMG file and drag Scrollapp to your Applications folder.
 3. **Security Override**: Since the app is distributed without Apple notarization, you'll need to manually allow it:
    - **Method 1**: Right-click on Scrollapp.app → "Open" → "Open" in the dialog
@@ -81,6 +82,24 @@ Once auto-scroll is activated:
 - Move further from the center point for faster scrolling
 - Move closer to the center point for slower, more precise scrolling
 
+### Click-triggered Shortcuts
+
+Open **Click Shortcuts**, record your sequence and choose a delivery scope for
+each step. **Target app** sends to the foreground application's window and
+remains the default for existing configurations. **System hotkey** uses macOS
+global dispatch for shortcuts registered by apps such as ClipSlots. Re-recording
+retains the selected scope; changing it resets sequence progress.
+
+Each click uses one delivery route, with no fallback or retry. Permission loss,
+Secure Input, held modifier keys or a foreground change prevent submission and
+keep the current step. Successful submission advances the sequence without
+confirming that the receiving app completed its action.
+
+Native tests cover F18/F19 and P combinations. Option–F20 reached the window
+without triggering the registered Carbon hotkey on the test Mac. ClipSlots'
+slot-selection and paste workflow has not been verified end to end. See the
+release validation report for coverage and limitations.
+
 ### Customization
 
 **Scroll Speed:**
@@ -107,7 +126,7 @@ Access additional options from the menu bar icon:
 
 - Deployment target: macOS 13.0 or later
 - Mouse with middle button, side buttons, or trackpad support
-- 2.5.0 includes Apple Silicon (arm64) and Intel (x86_64) binaries
+- 2.5.1 includes Apple Silicon (arm64) and Intel (x86_64) binaries
 
 Global cursor skins use private macOS interfaces and have been verified on
 macOS 26.6.2 / Apple M2 Pro. The x86_64 path has passed Rosetta tests.
@@ -115,7 +134,7 @@ Intel hardware and macOS 13/14/15 have not been tested. A deployment target
 and a Universal binary do not certify those environments. App-drawn cursors
 may not follow global cursor replacements.
 
-2.5.0 is a preview distribution: it has no Developer ID signature or Apple
+2.5.1 is a preview distribution: it has no Developer ID signature or Apple
 notarization, and Gatekeeper assessment rejects the ad-hoc signature.
 See the attached validation report for tested and pending scenarios.
 
@@ -132,7 +151,7 @@ See the attached validation report for tested and pending scenarios.
 ## Building from Source
 
 Clone `https://github.com/Seven-hub-fanfan/scrollapp-leftclick` and check out
-`v2.5.0` for the release source. Install Xcode Command Line Tools. From the source root:
+`v2.5.1` for the release source. Install Xcode Command Line Tools. From the source root:
 
 ```bash
 bash scripts/build_app.sh

@@ -106,13 +106,52 @@ images or running the separate global service checks.
 
 Verifies the 10-step cap, order, completion without looping, back/reset,
 configuration normalization, persistence, recording suspension, target selection,
-and failure/permission boundaries using an injected event delivery.
+and failure/permission boundaries using an injected event delivery. Also checks
+legacy scope migration, mixed application/system sequences, scope persistence,
+pending-click cancellation, late modifier presses and foreground changes.
 
 ```bash
 xcrun swiftc Scrollapp/ShortcutSequence.swift Scrollapp/ShortcutEngine.swift \
   Scrollapp/Localization.swift scripts/verify_shortcuts.swift -o /tmp/verify-shortcuts
 /tmp/verify-shortcuts
 ```
+
+### `verify_global_shortcuts.py` / `verify_global_shortcuts.swift`
+
+Builds an external AppKit receiver and sender using the actual
+`SystemShortcutDelivery` and `ShortcutEngine`. Registers Carbon hotkeys on
+Control–Option–Command–F18, Control–Option–Shift–Command–F19, Option–P and
+Control–Option–Command–P.
+The target-app route must reach the window without triggering Carbon; the system
+route must trigger Carbon exactly once, including 12 loop executions at 40 Hz.
+Unregistered F17 verifies modifier release after each scenario. Foreground
+changes before main key-down are injected at each production guard to verify
+cancellation and real HID cleanup; a stale target PID must produce no input.
+
+```bash
+python3 scripts/verify_global_shortcuts.py
+# Or retain results in a new external directory:
+python3 scripts/verify_global_shortcuts.py --output /tmp/scrollapp-global-check
+```
+
+Requires an unlocked desktop and Accessibility for the test sender's hosting
+application. Missing permission or Secure Input returns `BLOCKED` (exit 3);
+a hotkey registration conflict or assertion failure returns `FAIL` (exit 1).
+JSON reports include separate Carbon/window counts, submitted counts, permission
+state and modifier readback. The receiver closes afterward and focus returns to
+the previous app. Fixtures and logs go to a temporary directory; the sender uses
+in-memory settings and never accesses the clipboard or production configuration.
+Carbon success confirms macOS hotkey dispatch, not ClipSlots end-to-end paste.
+Coverage uses F18/F19 and P; it does not certify every function-key combination.
+An exploratory Option–F20 injection reached the window without a Carbon
+callback on the current machine. Keep that combination out of the passing
+acceptance set until its platform mapping is resolved.
+
+In Scrollapp, each shortcut has a **Target app / System hotkey** picker.
+Existing and unknown scopes default to Target app. Select System hotkey for
+ClipSlots-style global shortcuts. Re-recording retains that selection; editing
+the scope resets sequence progress. Only one route is used per click. Submission
+does not acknowledge completion in the receiving app and is never retried.
 
 ### `verify_prompt_vision.swift` / `verify_prompt_vision.py`
 

@@ -148,6 +148,8 @@ scripts/*
 !scripts/create_dmg_from_app.sh
 !scripts/README.md
 !scripts/verify_shortcuts.swift
+!scripts/verify_global_shortcuts.swift
+!scripts/verify_global_shortcuts.py
 !scripts/verify_prompt_vision.swift
 !scripts/verify_prompt_vision.py
 

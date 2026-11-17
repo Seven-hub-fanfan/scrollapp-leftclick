@@ -209,6 +209,15 @@ struct ShortcutSettingsView: View {
             .disabled(!permissions.accessibility)
             .accessibilityLabel(L10n.t("shortcuts.edit", index + 1, ShortcutKeyNames.display(step.chord)))
             .accessibilityIdentifier("shortcuts.edit.\(index)")
+            Picker(L10n.t("shortcuts.scope"), selection: Binding(
+                get: { step.scope }, set: { endRecording(); engine.setScope($0, for: step.id) })) {
+                ForEach(ShortcutScope.allCases, id: \.self) { scope in
+                    Text(L10n.t("shortcuts.scope.\(scope.rawValue)")).tag(scope)
+                }
+            }
+            .pickerStyle(.menu).labelsHidden().frame(width: 124)
+            .help(L10n.t("shortcuts.scopeHelp"))
+            .accessibilityIdentifier("shortcuts.scope.\(index)")
             HStack(spacing: 0) {
                 rowAction("arrow.up", label: L10n.t("shortcuts.moveUp"), id: "up.\(index)",
                     disabled: index == 0) { endRecording(); engine.move(step.id, by: -1) }

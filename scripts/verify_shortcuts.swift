@@ -9,10 +9,12 @@ private final class TestDelivery: ShortcutDelivery {
     var succeeds = true
     var sent: [ShortcutChord] = []
     var targets: [pid_t] = []
-    func send(_ chord: ShortcutChord, to pid: pid_t) -> Bool {
+    var scopes: [ShortcutScope] = []
+    func send(_ chord: ShortcutChord, scope: ShortcutScope, to pid: pid_t) -> Bool {
         guard succeeds else { return false }
         sent.append(chord)
         targets.append(pid)
+        scopes.append(scope)
         return true
     }
 }
@@ -58,6 +60,27 @@ struct VerifyShortcuts {
         expect(migrated.steps == sequence.steps && migrated.trigger == .middle,
                "Old sequences retain chords while adopting the middle-button default")
         expect(!migrated.isLooping, "Old configurations retain stop-at-end behavior")
+        var oldStep = try JSONSerialization.jsonObject(with: JSONEncoder().encode(sequence.steps[0])) as! [String: Any]
+        oldStep.removeValue(forKey: "scope")
+        let oldStepData = try JSONSerialization.data(withJSONObject: oldStep)
+        let oldDecoded = try JSONDecoder().decode(ShortcutStep.self, from: oldStepData)
+        expect(oldDecoded.scope == .application,
+               "Old steps default to application delivery")
+        oldStep["scope"] = "futureScope"
+        let unknownStepData = try JSONSerialization.data(withJSONObject: oldStep)
+        let unknownDecoded = try JSONDecoder().decode(ShortcutStep.self, from: unknownStepData)
+        expect(unknownDecoded.scope == .application,
+               "Unknown scopes never opt into global input")
+        sequence.advance()
+        sequence.setScope(.systemHotkey, for: sequence.steps[3].id)
+        expect(sequence.position == 0 && sequence.steps[3].scope == .systemHotkey,
+               "Changing a scope resets progress")
+        sequence.replace(sequence.steps[3].id, with: a)
+        expect(sequence.steps[3].scope == .systemHotkey, "Rerecording retains scope")
+        let mixedData = try JSONEncoder().encode(sequence)
+        let mixedDecoded = try JSONDecoder().decode(ShortcutSequence.self, from: mixedData)
+        expect(mixedDecoded == sequence,
+               "Mixed scopes round-trip with stable identities")
         let duplicate = ShortcutStep(chord: a)
         sequence.steps = [duplicate, duplicate, ShortcutStep(chord:
             ShortcutChord(keyCode: 55, modifiers: []))] + Array(repeating: b, count: 14)
@@ -78,6 +101,9 @@ struct VerifyShortcuts {
         defer { defaults.removePersistentDomain(forName: suite) }
         let delivery = TestDelivery()
         let engine = ShortcutEngine(defaults: defaults, delivery: delivery)
+        var focusedTarget: pid_t = ProcessInfo.processInfo.processIdentifier + 100
+        engine.foregroundPID = { focusedTarget }
+        engine.currentModifiers = { [] }
         engine.setEnabled(true)
         expect(!engine.sequence.isEnabled, "Empty sequence cannot be enabled")
         engine.add(a)
@@ -109,7 +135,9 @@ struct VerifyShortcuts {
         expect(engine.sequence.position == 0, "Failed delivery cannot advance")
         delivery.succeeds = true
         engine.executeClick(to: target)
+        focusedTarget = target + 1
         engine.executeClick(to: target + 1)
+        focusedTarget = target
         engine.executeClick(to: target)
         expect(delivery.sent == [a, b] && engine.sequence.position == 2,
                "Rapid clicks deliver one ordered chord each and stop at the end")
@@ -160,9 +188,30 @@ struct VerifyShortcuts {
         engine.middleClickAllowed = { false }
         RunLoop.current.run(until: Date().addingTimeInterval(0.08))
         expect(delivery.sent.count == countBefore + 1, "Scrolling suppresses a pending middle-click shortcut")
-        engine.setTrigger(.left)
+        engine.middleClickAllowed = { true }
+        engine.registerMouseDown(at: 6)
         engine.completeMouseClick(to: target)
-        expect(delivery.sent.count == countBefore + 2,
+        engine.currentModifiers = { .option }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.08))
+        expect(delivery.sent.count == countBefore + 1 && engine.issue == "shortcuts.releaseModifiers",
+               "Modifiers pressed during the middle-click delay cancel delivery")
+        engine.currentModifiers = { [] }
+        engine.foregroundPID = { target + 1 }
+        engine.executeClick(to: target)
+        expect(delivery.sent.count == countBefore + 1 && engine.issue == "shortcuts.focusChanged",
+               "Immediate execution also checks the captured foreground PID")
+        engine.foregroundPID = { target }
+        engine.registerMouseDown(at: 7)
+        engine.completeMouseClick(to: target)
+        engine.setScope(.systemHotkey, for: engine.sequence.steps[1].id)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.08))
+        expect(delivery.sent.count == countBefore + 1 && engine.sequence.position == 0,
+               "Scope editing cancels pending clicks")
+        engine.executeClick(to: target)
+        engine.setTrigger(.left)
+        engine.middleClickAllowed = { false }
+        engine.completeMouseClick(to: target)
+        expect(delivery.sent.count == countBefore + 3 && delivery.scopes.suffix(2) == [.application, .systemHotkey],
                "Left-button execution remains immediate while middle scrolling is active")
         for step in engine.sequence.steps { engine.remove(step.id) }
         expect(engine.sequence.steps.isEmpty && !engine.sequence.isEnabled,
@@ -176,6 +225,8 @@ struct VerifyShortcuts {
         defer { loopDefaults.removePersistentDomain(forName: loopSuite) }
         let loopDelivery = TestDelivery()
         let loopEngine = ShortcutEngine(defaults: loopDefaults, delivery: loopDelivery)
+        loopEngine.foregroundPID = { target }
+        loopEngine.currentModifiers = { [] }
         loopEngine.add(a)
         loopEngine.setEnabled(true)
         loopEngine.executeClick(to: target)
@@ -196,11 +247,15 @@ struct VerifyShortcuts {
         expect(loopDelivery.sent.count == 10 && loopEngine.sequence.next == nil,
                "Turning Loop off restores stop-at-end behavior")
         loopEngine.add(b)
+        loopEngine.setScope(.systemHotkey, for: loopEngine.sequence.steps[1].id)
         loopEngine.setLooping(true)
         loopDelivery.sent = []
         for _ in 0..<6 { loopEngine.executeClick(to: target) }
         expect(loopDelivery.sent == [a, b, a, b, a, b] && loopEngine.sequence.position == 0,
                "Multiple groups loop in order without skipping or duplicating")
+        expect(Array(loopDelivery.scopes.suffix(6)) ==
+               [.application, .systemHotkey, .application, .systemHotkey, .application, .systemHotkey],
+               "A mixed sequence uses exactly one selected route per click")
         loopEngine.back()
         expect(loopEngine.sequence.next?.chord == b, "Back at a loop boundary selects the last group")
         loopEngine.reset()

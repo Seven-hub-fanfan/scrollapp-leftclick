@@ -4,6 +4,9 @@ import Carbon
 import Combine
 
 extension ShortcutModifiers {
+    static var physicalState: Self {
+        Self(NSEvent.ModifierFlags(rawValue: UInt(CGEventSource.flagsState(.hidSystemState).rawValue)))
+    }
     init(_ flags: NSEvent.ModifierFlags) {
         var result: Self = []
         if flags.contains(.control) { result.insert(.control) }
@@ -71,16 +74,25 @@ enum ShortcutKeyNames {
 protocol ShortcutDelivery {
     var isAuthorized: Bool { get }
     var isSecureInput: Bool { get }
-    func send(_ chord: ShortcutChord, to pid: pid_t) -> Bool
+    /// True means the main key-down was submitted, not that the receiver acted.
+    func send(_ chord: ShortcutChord, scope: ShortcutScope, to pid: pid_t) -> Bool
 }
 
 struct SystemShortcutDelivery: ShortcutDelivery {
     static let syntheticTag: Int64 = 0x53434B455953
+    private static let functionKeys: Set<CGKeyCode> = [
+        122, 120, 99, 118, 96, 97, 98, 100, 101, 109,
+        103, 111, 105, 107, 113, 106, 64, 79, 80, 90
+    ]
     var isAuthorized: Bool { AXIsProcessTrusted() }
     var isSecureInput: Bool { IsSecureEventInputEnabled() }
+    var foregroundPID: () -> pid_t? = { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+    var currentModifiers: () -> ShortcutModifiers = { .physicalState }
 
-    func send(_ chord: ShortcutChord, to pid: pid_t) -> Bool {
-        guard chord.isValid, let source = CGEventSource(stateID: .privateState) else { return false }
+    func send(_ chord: ShortcutChord, scope: ShortcutScope, to pid: pid_t) -> Bool {
+        guard isAuthorized, !isSecureInput, currentModifiers().isEmpty,
+              pid > 0, pid != ProcessInfo.processInfo.processIdentifier, foregroundPID() == pid,
+              chord.isValid, let source = CGEventSource(stateID: .privateState) else { return false }
         source.localEventsSuppressionInterval = 0
         var events: [CGEvent] = []
         var held: ShortcutModifiers = []
@@ -91,6 +103,8 @@ struct SystemShortcutDelivery: ShortcutDelivery {
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down)
             else { return false }
             event.flags = flags.eventFlags
+            // Carbon dispatch expects the same Fn marker as hardware F1–F20.
+            if Self.functionKeys.contains(key) { event.flags.insert(.maskSecondaryFn) }
             event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticTag)
             event.setIntegerValueField(.keyboardEventAutorepeat, value: 0)
             events.append(event)
@@ -106,9 +120,36 @@ struct SystemShortcutDelivery: ShortcutDelivery {
             held.remove(modifier)
             guard append(key, down: false, flags: held) else { return false }
         }
-        // Build every down/up first, then post the entire chord to one process.
-        // No timer or delayed work can leak into the next application.
-        for event in events { event.postToPid(pid) }
+        if scope == .application {
+            for event in events { event.postToPid(pid) }
+            return true
+        }
+        // HID input passes through macOS global hotkey dispatch. Never also send
+        // to the PID: a receiver could otherwise run the same action twice.
+        let modifierCount = chord.modifiers.rawValue.nonzeroBitCount
+        var pressedCount = 0
+        var pressed: ShortcutModifiers = []
+        let usedModifiers = modifierKeys.filter { chord.modifiers.contains($0.0) }
+        func releaseModifiers() {
+            for index in (0..<pressedCount).reversed() {
+                pressed.remove(usedModifiers[index].0)
+                let event = events[events.count - 1 - index]
+                event.flags = pressed.eventFlags
+                event.post(tap: .cghidEventTap)
+            }
+        }
+        for index in 0...modifierCount {
+            // Once main key-down is submitted we must finish key-up/cleanup even
+            // if focus changes, and report submitted to avoid a duplicate retry.
+            guard foregroundPID() == pid else { releaseModifiers(); return false }
+            events[index].post(tap: .cghidEventTap)
+            if index < modifierCount {
+                pressed.insert(usedModifiers[index].0)
+                pressedCount += 1
+            }
+        }
+        events[modifierCount + 1].post(tap: .cghidEventTap)
+        releaseModifiers()
         return true
     }
 }
@@ -133,6 +174,7 @@ final class ShortcutEngine: ObservableObject {
     var middleDoubleClickInterval: () -> TimeInterval = { 0 }
     var middleClickAllowed: () -> Bool = { true }
     var foregroundPID: () -> pid_t? = { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+    var currentModifiers: () -> ShortcutModifiers = { .physicalState }
 
     init(defaults: UserDefaults = .standard, delivery: ShortcutDelivery = SystemShortcutDelivery()) {
         self.defaults = defaults
@@ -242,8 +284,11 @@ final class ShortcutEngine: ObservableObject {
               pid != ProcessInfo.processInfo.processIdentifier, let step = sequence.next else { return }
         guard delivery.isAuthorized else { issue = "shortcuts.permission"; return }
         guard !delivery.isSecureInput else { issue = "shortcuts.secureInput"; return }
-        guard modifiers.isEmpty else { issue = "shortcuts.releaseModifiers"; return }
-        guard delivery.send(step.chord, to: pid) else { issue = "shortcuts.sendFailed"; return }
+        guard modifiers.isEmpty, currentModifiers().isEmpty else { issue = "shortcuts.releaseModifiers"; return }
+        guard foregroundPID() == pid else { issue = "shortcuts.focusChanged"; return }
+        guard delivery.send(step.chord, scope: step.scope, to: pid) else {
+            issue = "shortcuts.sendFailed"; return
+        }
         change { $0.advance() }
     }
 
@@ -263,6 +308,7 @@ final class ShortcutEngine: ObservableObject {
     func setLooping(_ value: Bool) { change { $0.isLooping = value } }
     func add(_ chord: ShortcutChord) { change { $0.add(chord) }; refreshListener() }
     func replace(_ id: UUID, with chord: ShortcutChord) { change { $0.replace(id, with: chord) } }
+    func setScope(_ scope: ShortcutScope, for id: UUID) { change { $0.setScope(scope, for: id) } }
     func remove(_ id: UUID) { change { $0.remove(id) }; refreshListener() }
     func move(_ id: UUID, by offset: Int) { change { $0.move(id, by: offset) } }
     func back() { change { $0.back() } }

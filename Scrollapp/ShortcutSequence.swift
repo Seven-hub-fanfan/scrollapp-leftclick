@@ -19,9 +19,29 @@ struct ShortcutChord: Codable, Equatable {
     }
 }
 
+enum ShortcutScope: String, Codable, CaseIterable {
+    case application, systemHotkey
+}
+
 struct ShortcutStep: Codable, Identifiable, Equatable {
     var id = UUID()
     var chord: ShortcutChord
+    var scope: ShortcutScope = .application
+
+    init(id: UUID = UUID(), chord: ShortcutChord, scope: ShortcutScope = .application) {
+        self.id = id
+        self.chord = chord
+        self.scope = scope
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, chord, scope }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        chord = try values.decode(ShortcutChord.self, forKey: .chord)
+        // Missing or unrecognized scopes never opt old settings into global input.
+        scope = (try? values.decode(ShortcutScope.self, forKey: .scope)) ?? .application
+    }
 }
 
 enum ShortcutTrigger: String, Codable, CaseIterable {
@@ -79,6 +99,12 @@ struct ShortcutSequence: Codable, Equatable {
     mutating func replace(_ id: UUID, with chord: ShortcutChord) {
         guard chord.isValid, let index = steps.firstIndex(where: { $0.id == id }) else { return }
         steps[index].chord = chord
+        position = 0
+    }
+
+    mutating func setScope(_ scope: ShortcutScope, for id: UUID) {
+        guard let index = steps.firstIndex(where: { $0.id == id }) else { return }
+        steps[index].scope = scope
         position = 0
     }
 
